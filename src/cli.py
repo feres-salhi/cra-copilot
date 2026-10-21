@@ -1,6 +1,7 @@
 """The `cra` command-line tool.
 
-Exit codes: 0 = all fine, 1 = some component is UNKNOWN (a human must look), 2 = input rejected.
+Exit codes: 0 = all fine, 1 = RESULT INCOMPLETE (an UNKNOWN component or a warning: a human must look),
+2 = input rejected.
 
 Run it with:  python -m src <command>   (from the project folder, using the .venv python)
 """
@@ -34,6 +35,8 @@ def _check_sbom(args):
     unknown = sum(1 for c in result.components if c.status != "OK")
     if unknown:
         print(f"{unknown} component(s) are UNKNOWN: they could not be checked and need a human.")
+    if unknown or result.warnings:
+        print("RESULT INCOMPLETE - do not rely on this SBOM check as an all-clear.")
         return 1
     return 0
 

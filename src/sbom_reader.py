@@ -29,8 +29,14 @@ MAX_TEXT_LENGTH = 256
 # Strict allowed characters (plain ASCII only, no spaces, no control characters).
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+:@/~-]*")
 VERSION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~!-]*")
-# No %, ?, # in a purl: no hidden escapes, no qualifiers, no subpath.
-PURL_PATTERN = re.compile(r"pkg:[A-Za-z0-9._+~:/@!-]+")
+# No % and no # in a purl (no hidden escapes, no subpath). A "?key=value&key=value" part is allowed
+# by this pattern, but later only the harmless qualifiers in HARMLESS_QUALIFIERS are accepted.
+PURL_PATTERN = re.compile(r"pkg:[A-Za-z0-9._+~:/@!-]+(\?[A-Za-z0-9._=&-]+)?")
+# Real SBOM tools often write pkg:maven/...@1.0?type=jar. These two do not change WHICH package it is.
+HARMLESS_QUALIFIERS = {"type", "classifier"}
+QUALIFIER_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,32}")
+# Each part of a Maven group id (the purl "namespace"), e.g. org / apache / logging.
+GROUP_SEGMENT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-zÄÖÜäöüß0-9][A-Za-zÄÖÜäöüß0-9 ._,&()+-]*")
 
 EU_MEMBER_STATES = {
@@ -122,22 +128,36 @@ def _read_component(raw):
     # The purl is the identity the matcher will use, so it must agree with the fields.
     if not parsed.name or not parsed.version:
         return unknown("purl has no name or version", ecosystem)
-    if parsed.qualifiers or parsed.subpath:
-        return unknown("purl has qualifiers or a subpath", ecosystem)
+    # The library quietly tidies the qualifier text (keeps the last duplicate, drops empty keys),
+    # so look at the raw text ourselves.
+    if "?" in purl:
+        keys = [pair.partition("=")[0] for pair in purl.split("?", 1)[1].split("&")]
+        if "" in keys or len(keys) != len(set(keys)):
+            return unknown("purl has qualifiers that are not supported", ecosystem)
+    qualifiers = parsed.qualifiers or {}
+    if (set(qualifiers) - HARMLESS_QUALIFIERS) or not all(
+        QUALIFIER_VALUE_PATTERN.fullmatch(str(v)) for v in qualifiers.values()
+    ):
+        return unknown("purl has qualifiers that are not supported", ecosystem)
     if ecosystem == "maven" and not parsed.namespace:
         return unknown("maven purl has no namespace", ecosystem)
     if ecosystem == "pypi" and parsed.namespace:
         return unknown("pypi purl must not have a namespace", ecosystem)
-    names = [parsed.name] + ([parsed.namespace] if parsed.namespace else [])
-    if not all(NAME_PATTERN.fullmatch(n) for n in names) or not VERSION_PATTERN.fullmatch(parsed.version):
-        return unknown("purl parts have invalid characters", ecosystem)
+    if ecosystem == "maven":
+        segments = parsed.namespace.split("/")
+        if not all(GROUP_SEGMENT_PATTERN.fullmatch(s) and ".." not in s for s in segments):
+            return unknown("maven purl namespace has invalid characters", ecosystem)
+        group, group_problem = _clean(raw.get("group"), NAME_PATTERN)
+        if group_problem == "invalid" or (group is not None and group != parsed.namespace.replace("/", ".")):
+            return unknown("purl namespace does not match group", ecosystem)
     if not _same_name(ecosystem, parsed.name, name):
         return unknown("purl name does not match name", ecosystem)
     if parsed.version != version:
         return unknown("purl version does not match version", ecosystem)
 
-    # Keep the canonical purl (rebuilt by the library), not the raw text.
-    return Component(name, version, parsed.to_string(), ecosystem, "OK")
+    # Keep a canonical purl rebuilt from its parts (no qualifiers), never the raw text.
+    canonical = PackageURL(parsed.type, parsed.namespace, parsed.name, parsed.version).to_string()
+    return Component(name, version, canonical, ecosystem, "OK")
 
 
 def _read_limited(path, limit):
@@ -147,6 +167,10 @@ def _read_limited(path, limit):
         raise OSError("not a regular file")
     with open(file_path, "rb") as handle:
         return handle.read(limit + 1)
+
+
+def _reject_constant(name):
+    raise SbomError(f"JSON contains {name}, which is not allowed")
 
 
 def _reject_duplicate_keys(pairs):
@@ -196,7 +220,7 @@ def _load_json(path):
 
     _check_depth(text)
     try:
-        return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+        return json.loads(text, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
     except RecursionError as error:
         raise SbomError("JSON is nested too deeply") from error
     except ValueError as error:
@@ -249,8 +273,8 @@ def read_product_config(path):
             raise ConfigError("config file is too large")
         text = raw_bytes.decode("utf-8-sig")
         _check_depth(text)
-        data = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
-    except SbomError as error:  # duplicate keys or too deep
+        data = json.loads(text, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
+    except SbomError as error:  # duplicate keys, too deep, NaN
         raise ConfigError(str(error)) from error
     except (OSError, ValueError, TypeError, RecursionError) as error:
         raise ConfigError(f"cannot read config file: {error}") from error

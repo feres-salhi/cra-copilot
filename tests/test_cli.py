@@ -45,6 +45,7 @@ def test_all_ok_sbom_exits_with_0(tmp_path, capsys):
         encoding="utf-8",
     )
     assert main(["check-sbom", str(sbom)]) == 0
+    assert "INCOMPLETE" not in capsys.readouterr().out
 
 
 def test_unreadable_path_is_rejected_not_a_crash(tmp_path, capsys):
@@ -72,3 +73,19 @@ def test_component_with_a_name_but_no_version_prints_a_question_mark(tmp_path, c
                     encoding="utf-8")
     main(["check-sbom", str(sbom)])
     assert "foo ?" in capsys.readouterr().out
+
+
+def test_empty_sbom_is_never_an_all_clear(tmp_path, capsys):
+    sbom = tmp_path / "empty.json"
+    sbom.write_text('{"bomFormat": "CycloneDX", "components": []}', encoding="utf-8")
+    assert main(["check-sbom", str(sbom)]) == 1
+    out = capsys.readouterr().out
+    assert "no components" in out and "RESULT INCOMPLETE" in out
+
+
+def test_sbom_without_dependency_list_is_incomplete(tmp_path, capsys):
+    sbom = tmp_path / "nodeps.json"
+    sbom.write_text('{"bomFormat": "CycloneDX", "components": [{"name": "x", "version": "1", "purl": "pkg:pypi/x@1"}]}',
+                    encoding="utf-8")
+    assert main(["check-sbom", str(sbom)]) == 1
+    assert "RESULT INCOMPLETE" in capsys.readouterr().out
