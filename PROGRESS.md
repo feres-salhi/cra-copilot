@@ -74,3 +74,37 @@
 **How it connects:** this is the front panel of the tool. Part 2 and 3 will add `run` and `status` here.
 
 ---
+
+## End of Phase 1 — review meeting and secrets check
+
+**Who met:** three AI reviewers — a *security architect* (judges the design), a *penetration tester* (a friendly attacker who tries to break the code) and a *code reviewer* (also the judge who keeps things simple). Two rounds, as allowed. The secrets check was done by a separate *secrets and credential hygiene* reviewer.
+
+**Round 1 — what they found**
+- *Penetration tester:* tried about 11 kinds of attacks (device names like `NUL`, deeply nested files, duplicate keys, huge files, odd encodings, control characters, fake purls, a flood of components). **None succeeded.**
+- *Code reviewer:* real SBOM tools often write `?type=jar` at the end of a purl, and my reader marked all of those UNKNOWN. **Must fix.** Also two tests were too weak and some code branches could never run.
+- *Security architect:* an empty SBOM could look like "all clear"; a shared safe-path helper is needed before Phase 2 writes files; key-file names missing in `.gitignore`; GitHub Actions should be pinned; supply chain (hash pinning, pip-audit) is thin.
+
+**Round 2 — what I did, and what they said**
+- Accepted harmless purl qualifiers `type` and `classifier` and removed them from the stored purl (anything else → UNKNOWN).
+- An SBOM with no components or no dependency list now prints **RESULT INCOMPLETE** and exits with code 1.
+- New `src/safe_paths.py` (`safe_join`): one place that refuses `..`, slashes, drive letters, Windows device names (`CON`, `NUL`...), trailing dots and symlinks that leave the folder.
+- `NaN` / `Infinity` are rejected; dead code removed; two weak tests now check the exact reason.
+- `.gitignore` now also blocks `*.pem`, `*.key`, `*.p12`, `credentials*.json`, `secrets.*` and `.claude/settings.local.json`.
+- The pen tester re-attacked the new code and found three small gaps (duplicate/empty qualifier keys, Maven group not character-checked or compared to the SBOM's `group`, `safe_join` allowing device names). **All three fixed and tested.**
+- Verdicts: security architect **agrees**, code reviewer **agrees**, penetration tester found **no way to get a wrong package to "OK"**.
+
+**Decisions left as they are (written down honestly)**
+- *No hash-pinning, pip-audit or lockfile* (architect, "overkill for a student project"). The README must say the pins have **no hashes** and must not claim supply-chain hardening.
+- *No local pre-commit secret scan* — PLAN.md calls it optional. It is OK only because nothing is pushed yet.
+- *GitHub Actions pinned only to version tags.* Needs Fares before the first push (QUESTIONS.md #2).
+- The 10 MB file limit can use about 266 MB memory in a worst case (PLAN.md number kept).
+
+**Secrets check (secrets and credential hygiene reviewer): PASS.** No keys, passwords or tokens in the working files or in the whole git history (checked 11 commits). `.env` does not exist and is ignored; `.env.example` holds only the placeholder; `cases/`, `cache/`, `runs/` are ignored. `gitleaks` itself is not installed here, so its own scan did not run — the search used pattern matching (narrower than gitleaks). A second secrets check will be run at the end of Phase 2 before finishing.
+
+**Strix scan pending** (no API budget).
+
+**Tests at the end of Phase 1 work:** 294 passed, 1 skipped, 0 failed. (The skipped test needs permission to create symlinks, which this Windows account does not have; so the "symlink that points outside is refused" test did **not** run here. `safe_join` does resolve paths, but that one check is not proven by a test on this computer.) This number also contains the Phase 2 tests already written.
+
+**How it connects:** Phase 1 is the safe front door: nothing hostile or unclear gets past the SBOM reader as "OK", and the path helper protects all later file writing.
+
+---

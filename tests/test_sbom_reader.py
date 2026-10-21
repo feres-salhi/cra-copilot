@@ -87,7 +87,12 @@ def test_unparsable_purl_is_unknown(tmp_path):
     c = _one_component(
         tmp_path, {"name": "x", "version": "1.0", "purl": "this is not a purl"}
     )
-    assert c.status == "UNKNOWN"
+    assert (c.status, c.reason) == ("UNKNOWN", "invalid purl")  # fails the character check first
+
+
+def test_purl_the_library_cannot_parse_is_unknown(tmp_path):
+    c = _one_component(tmp_path, {"name": "x", "version": "1.0", "purl": "pkg:pypi"})
+    assert (c.status, c.reason) == ("UNKNOWN", "purl cannot be parsed")
 
 
 def test_non_text_version_is_unknown(tmp_path):
@@ -146,7 +151,7 @@ def test_pypi_name_spelling_differences_are_allowed(tmp_path):
 
 def test_purl_without_version_is_unknown(tmp_path):
     c = _one_component(tmp_path, {"name": "x", "version": "1.0", "purl": "pkg:pypi/x"})
-    assert c.status == "UNKNOWN"
+    assert (c.status, c.reason) == ("UNKNOWN", "purl has no name or version")
 
 
 def test_maven_purl_without_namespace_is_unknown(tmp_path):
@@ -359,7 +364,8 @@ def test_missing_config_file_is_rejected(tmp_path):
 @pytest.mark.parametrize(
     "bad_purl, expected_reason_part",
     [
-        ("pkg:pypi/requests@2.0?repository_url=http://x", "invalid purl"),
+        ("pkg:pypi/requests@2.0?repository_url=x", "purl has qualifiers that are not supported"),
+        ("pkg:pypi/requests@2.0?type=a/b", "invalid purl"),
         ("pkg:pypi/requests@2.0#sub/path", "invalid purl"),
         ("pkg:pypi/%72equests@2.0", "invalid purl"),
         ("pkg:maven/%0Ax/requests@2.0", "invalid purl"),
@@ -436,3 +442,45 @@ def test_a_folder_instead_of_a_file_is_rejected(tmp_path):
         read_sbom(tmp_path)
     with pytest.raises(ConfigError):
         read_product_config(tmp_path)
+
+
+@pytest.mark.parametrize("suffix", ["?type=jar", "?classifier=sources", "?type=jar&classifier=tests"])
+def test_harmless_purl_qualifiers_are_accepted_and_removed(tmp_path, suffix):
+    purl = "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1" + suffix
+    c = _one_component(tmp_path, {"name": "log4j-core", "version": "2.14.1", "purl": purl})
+    assert c.status == "OK"
+    assert c.purl == "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_nan_and_infinity_reject_the_file(tmp_path, constant):
+    path = _write_text(tmp_path, '{"bomFormat": "CycloneDX", "x": ' + constant + "}")
+    with pytest.raises(SbomError, match="not allowed"):
+        read_sbom(path)
+
+
+@pytest.mark.parametrize("suffix", ["?type=jar&type=x", "?=x", "?type=jar&=y", "?type=jar&&classifier=a", "?type"])
+def test_duplicate_or_empty_qualifier_keys_are_refused(tmp_path, suffix):
+    purl = "pkg:maven/org.example/lib@1.0" + suffix
+    c = _one_component(tmp_path, {"name": "lib", "version": "1.0", "purl": purl})
+    assert c.status == "UNKNOWN"
+
+
+@pytest.mark.parametrize("namespace", ["../c", "a/./c", "a!b", "a@b", "-a"])
+def test_odd_maven_namespaces_are_never_ok(tmp_path, namespace):
+    c = _one_component(tmp_path, {"name": "lib", "version": "1.0", "purl": f"pkg:maven/{namespace}/lib@1.0"})
+    assert c.status == "UNKNOWN"
+
+
+def test_maven_group_field_must_agree_with_the_purl_namespace(tmp_path):
+    good = {"group": "org.example", "name": "lib", "version": "1.0", "purl": "pkg:maven/org.example/lib@1.0"}
+    assert _one_component(tmp_path, good).status == "OK"
+    bad = dict(good, group="org.evil")
+    c = _one_component(tmp_path, bad)
+    assert (c.status, c.reason) == ("UNKNOWN", "purl namespace does not match group")
+    assert _one_component(tmp_path, dict(good, group="bad group!")).status == "UNKNOWN"
+
+
+def test_double_slash_in_a_namespace_is_cleaned_up_not_kept(tmp_path):
+    c = _one_component(tmp_path, {"name": "lib", "version": "1.0", "purl": "pkg:maven/a//b/lib@1.0"})
+    assert (c.status, c.purl) == ("OK", "pkg:maven/a/b/lib@1.0")

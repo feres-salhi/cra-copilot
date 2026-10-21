@@ -17,3 +17,13 @@ venv/
 cases/
 cache/
 runs/
+
+# Key and password files, just in case
+*.pem
+*.key
+*.p12
+credentials*.json
+secrets.*
+
+# Local Claude Code settings (personal, not for the repo)
+.claude/settings.local.json
