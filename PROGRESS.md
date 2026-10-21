@@ -169,7 +169,7 @@
 | requests 2.30.0 + CVE-2023-32681 | AFFECTED, not in KEV → recorded, no report |
 | requests 2.31.0 | NOT_AFFECTED (a git-commit range in the second advisory gives UNKNOWN there) |
 
-I also compared the matcher with OSV on all 6 real batch answers (36 listed vulnerability/component pairs): the matcher says AFFECTED for every one OSV lists — no disagreement.
+I also compared the matcher with OSV on all 6 real batch answers (32 listed vulnerability/component pairs: 7 + 3 + 8 + 0 + 8 + 6): the matcher says AFFECTED for every one OSV lists — no disagreement.
 
 **New words**
 - *Rule* — the short name of the reason for an answer (e.g. `osv_exact_version_list`).
