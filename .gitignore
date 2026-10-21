@@ -12,3 +12,8 @@ venv/
 
 # pytest cache
 .pytest_cache/
+
+# Private working folders (never upload)
+cases/
+cache/
+runs/
