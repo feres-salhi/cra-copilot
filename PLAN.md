@@ -99,7 +99,7 @@ Every check gives one of three answers: **AFFECTED**, **NOT_AFFECTED** or **UNKN
 1. Code builds `facts.json` from the SBOM, the saved feeds and the config: product name, component, version, CVE ID, awareness time, deadline, Member States and evidence link.
 2. **One shared formatter** turns every fact into text (dates in German and English, for example). The same strings feed both the placeholder filler and the fact checker's allowed list, so the two can never disagree.
 3. A **fixed German + English template written by code** holds every required fact, including the "affected" status sentence.
-4. **The AI (Claude API) writes only one short paragraph per language** about the general nature of the problem. It gets **only** IDs, fixed choices and placeholder names (`{product_name}`, `{component}`, `{cve_id}`). It **never** sees free text from vulnerability descriptions or the SBOM, so hidden instructions there can't reach it.
+4. **The AI (Google Gemini API, behind one small swappable function) writes only one short paragraph per language** about the general nature of the problem. It gets **only** IDs, fixed choices and placeholder names (`{product_name}`, `{component}`, `{cve_id}`). It **never** sees free text from vulnerability descriptions or the SBOM, so hidden instructions there can't reach it.
 
 **How the fact checker checks (two passes, rejects on any failure):**
 - **Pass 1, on the AI paragraph alone:**
@@ -140,7 +140,7 @@ Ranked from most to least serious.
 | 6 | **Hostile or oversized SBOM** (medium) | A huge or strange file crashes the tool, or sneaks odd text into reports. | Size, depth and count limits. Duplicate keys rejected. 256-character limit, strict characters. Bad component: only that one is UNKNOWN. |
 | 7 | **Tampering with approval files** (medium) | Someone edits `facts.json` or `check.json` so a wrong draft gets approved. | Approval rebuilds the facts and re-runs the checker. Fingerprints and `approvals.log`. Limits stated honestly in the docs. |
 | 8 | **Path tricks** (medium) | A case ID like `../../something` makes the tool write files in the wrong place. | Case IDs and CVE IDs checked with a strict pattern before any file path is built. |
-| 9 | **Leaked API key** (medium) | The Claude API key ends up on GitHub, in logs or in error messages. | Key only in `.env`, which is in `.gitignore`. A `.env.example` with placeholders. gitleaks secret scan in GitHub CI. No key in error messages or logs. Obviously fake keys in tests. `cases/`, `cache/`, `runs/` gitignored. Secrets subagent before every push. |
+| 9 | **Leaked API key** (medium) | The Gemini API key ends up on GitHub, in logs or in error messages. | Key only in `.env`, which is in `.gitignore`. A `.env.example` with placeholders. gitleaks secret scan in GitHub CI. No key in error messages or logs. Obviously fake keys in tests. `cases/`, `cache/`, `runs/` gitignored. Secrets subagent before every push. |
 | 10 | **Time-zone mistakes in the 24h clock** (medium) | A daylight-saving change or a date-only field shifts the deadline by an hour or a day. | Store UTC, show Berlin time, `tzdata` package, test across the DST change on 25 Oct 2026. KEV `dateAdded` (date only) is never used as the awareness time. |
 
 **Defenses the judge cut as overkill (accepted remaining risk):**
@@ -229,7 +229,7 @@ Each phase follows CLAUDE.md: build small pieces, tests pass, code-reviewer and 
 
 **Phase 3 — Writing and checking the report**
 - Fixed German/English template + shared formatter.
-- `src/report_writer.py` (AI paragraph via Claude API, key from `.env`).
+- `src/report_writer.py` (AI paragraph via Google Gemini API behind one small swappable function, key from `.env`).
 - `src/fact_checker.py` + all rejection and prompt-injection tests.
 
 **Phase 4 — Approval and the full flow**
@@ -249,3 +249,15 @@ Each phase follows CLAUDE.md: build small pieces, tests pass, code-reviewer and 
 5. **AI paragraph:** keep the short AI paragraph in v1 (recommended by the team), or make the report 100% template with no AI?
 6. **Scope:** is PyPI + Maven enough for v1?
 7. **Legal check:** before Phase 3, the CRA text must be checked against the official regulation: the exact content of Art. 14(2), the duty to inform users in Art. 14(8), and the field format of the ENISA Single Reporting Platform. Do you want to do this yourself, or should we research it together?
+
+---
+
+## (f) Decisions by Fares (2026-10-21)
+
+1. **Demo Member States:** Germany, Austria, France.
+2. **AI model:** use a free Google Gemini API key for the AI paragraph instead of the Claude API. `report_writer.py` keeps the AI provider behind one small function so it can be swapped later. The key lives only in `.env`.
+3. **Daily run:** local Windows Task Scheduler.
+4. **Licence:** MIT.
+5. **AI paragraph:** keep the short AI paragraph in v1, with all the fact-checker protections.
+6. **Scope:** PyPI + Maven is enough for v1.
+7. **Legal check:** Fares will verify the CRA Article 14 text together with an outside reviewer before Phase 3 starts.
