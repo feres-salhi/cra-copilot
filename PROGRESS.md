@@ -44,3 +44,33 @@
 **Open question:** empty SBOM handling is written in QUESTIONS.md as temporary decision #1.
 
 ---
+
+## Piece 5 — Command-line skeleton and secret-scan workflow (Phase 1)
+
+**What I built:** `src/cli.py` (run with `python -m src check-sbom <file> --config <file>`) that lists the components of an SBOM and what is UNKNOWN. Exit codes: 0 all fine, 1 some component UNKNOWN, 2 file rejected. Errors go to the error channel. Also `.github/workflows/gitleaks.yml`, a GitHub "robot" that will scan every upload for keys and passwords (it does nothing until the project is on GitHub; I did not push anything).
+
+**Why:** the plan wants a `cra` tool; this is the empty frame the later commands (`run`, `status`, ...) plug into. The secret scan is risk 9 in PLAN.md.
+
+**New words**
+- *CLI (command-line interface)* — a program you use by typing a command, not by clicking.
+- *Exit code* — a small number a program returns when it ends, so scripts can tell "fine" from "problem".
+- *stderr* — the separate output channel programs use for error messages.
+- *CI (continuous integration)* — a robot on GitHub that runs checks automatically on every upload.
+- *gitleaks* — a free tool that searches files and history for accidentally saved passwords and keys.
+- *Pinning* — fixing an add-on to one exact, unchangeable version so nobody can swap it later.
+
+**Tests:** 4 CLI tests first, then 8 after the review (including "hostile text is never printed"). Whole project at this point: 147 passed, 0 failed (this number also includes the not-yet-committed news watcher tests, written for the next piece).
+
+**Reviewer findings and what I did**
+- *Reviewer + auditor (same point):* the workflow would probably fail on pull requests without `pull-requests: read`. **Fixed.**
+- *Auditor:* the checkout step leaves the GitHub token on disk. **Fixed** (`persist-credentials: false`).
+- *Reviewer:* exit code was 0 even with UNKNOWN components. **Fixed** (now 1).
+- *Reviewer:* a Windows console could crash on unusual characters. **Fixed** (unprintable characters are replaced).
+- *Auditor:* reading a path that is a folder/device could hang; the config was read before its size was checked. **Fixed:** files are read with a size limit and only if they are real files.
+- *Auditor (cosmetic):* an unknown version printed as `None`. **Fixed** (prints `?`).
+- *NOT fixed:* pinning the GitHub Actions to commit codes (reviewer + auditor, low/medium). I cannot look the codes up with my allowed network sources and must not invent them. Written as question #2 in QUESTIONS.md.
+- *Checked clean by the auditor:* no terminal-escape text from an SBOM can reach the screen.
+
+**How it connects:** this is the front panel of the tool. Part 2 and 3 will add `run` and `status` here.
+
+---

@@ -23,6 +23,7 @@ SUPPORTED_ECOSYSTEMS = {"pypi", "maven"}
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_DEPTH = 32
 MAX_COMPONENTS = 5000
+MAX_CONFIG_BYTES = 64 * 1024
 MAX_TEXT_LENGTH = 256
 
 # Strict allowed characters (plain ASCII only, no spaces, no control characters).
@@ -139,6 +140,15 @@ def _read_component(raw):
     return Component(name, version, parsed.to_string(), ecosystem, "OK")
 
 
+def _read_limited(path, limit):
+    """Read at most limit + 1 bytes of a regular file (so a huge file is never fully loaded)."""
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise OSError("not a regular file")
+    with open(file_path, "rb") as handle:
+        return handle.read(limit + 1)
+
+
 def _reject_duplicate_keys(pairs):
     result = {}
     for key, value in pairs:
@@ -177,10 +187,7 @@ def _check_depth(text):
 
 def _load_json(path):
     try:
-        file_path = Path(path)
-        if file_path.stat().st_size > MAX_FILE_BYTES:
-            raise SbomError(f"SBOM file is larger than {MAX_FILE_BYTES} bytes")
-        raw_bytes = file_path.read_bytes()
+        raw_bytes = _read_limited(path, MAX_FILE_BYTES)
         if len(raw_bytes) > MAX_FILE_BYTES:
             raise SbomError(f"SBOM file is larger than {MAX_FILE_BYTES} bytes")
         text = raw_bytes.decode("utf-8-sig")
@@ -237,8 +244,8 @@ def read_sbom(path):
 def read_product_config(path):
     """Read the product config. Returns a dict with product_name, manufacturer, member_states."""
     try:
-        raw_bytes = Path(path).read_bytes()
-        if len(raw_bytes) > 64 * 1024:
+        raw_bytes = _read_limited(path, MAX_CONFIG_BYTES)
+        if len(raw_bytes) > MAX_CONFIG_BYTES:
             raise ConfigError("config file is too large")
         text = raw_bytes.decode("utf-8-sig")
         _check_depth(text)
