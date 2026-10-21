@@ -18,10 +18,16 @@ The tool NEVER sends anything. A human always decides (CLAUDE.md rule 6).
 """
 
 import argparse
+import hashlib
 import sys
+from pathlib import Path
 
 from src import matcher, news_watcher
 from src.sbom_reader import ConfigError, SbomError, load_sbom, read_product_config
+
+# Default folders are fixed next to the program, not "wherever the command was started":
+# the Windows Task Scheduler starts programs in other folders, and `run` and `status` must see the same files.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 KEV_NOTE = "Note: KEV is a floor, not a ceiling. It can lag behind and is US-focused; other sources still matter."
 
@@ -63,11 +69,32 @@ def _describe(finding):
     text = f"{name} {version}: {vuln} ({cves}) -> {finding['status']} [{finding['rule']}]"
     if finding["exploited"]:
         text += f" - ACTIVELY EXPLOITED per {finding['exploited_via']} ({finding['exploited_cve']})"
+        if finding.get("evidence"):
+            text += f" [evidence: {finding['evidence']['source_url']}, dated {finding['evidence']['date']}]"
         if finding["exploited_cve_matched_on"] != "id":
             text += f", linked through an {finding['exploited_cve_matched_on']}: a human should confirm"
+    elif finding.get("evidence_problem"):
+        text += f" - a human evidence file for {', '.join(finding['evidence_problem'])} exists but is UNUSABLE: fix it"
     elif not finding["exploited_known"]:
         text += " - could NOT check if it is exploited (KEV list not fresh)"
     return text
+
+
+def _save_failed_run(args, started, error_name):
+    """A crashed run must still leave a record, so `status` does not keep showing an older good run."""
+    record = {
+        "started_at": started.isoformat(),
+        "finished_at": args.now().isoformat(),
+        "complete": False,
+        "error": error_name,
+        "sources": {},
+        "components": {},
+    }
+    try:
+        news_watcher.save_run(args.runs, record, args.now)
+        print("A record of this failed run was saved; `cra status` will show it.")
+    except OSError:
+        print("The record of this failed run could NOT be saved either.")
 
 
 def _run(args):
@@ -84,18 +111,29 @@ def _run(args):
         result = matcher.evaluate(sbom.components, feeds, args.evidence)
     except OSError as error:
         print(f"RESULT INCOMPLETE - the cache folder could not be used ({type(error).__name__}).")
+        _save_failed_run(args, started, type(error).__name__)
         print("Nothing was sent. A human decides what happens next.")
         return 1
     except Exception as error:  # a last safety net: never end with a raw traceback and a wrong exit code
         print(f"RESULT INCOMPLETE - internal error ({type(error).__name__}). Do not rely on this run.")
+        _save_failed_run(args, started, type(error).__name__)
         print("Nothing was sent. A human decides what happens next.")
         return 1
     finished = args.now()
+    evidence_folder_exists = Path(args.evidence).is_dir()
+    try:
+        sbom_sha256 = hashlib.sha256(Path(args.sbom).read_bytes()).hexdigest()
+    except OSError:
+        sbom_sha256 = None
 
     print(f"Product: {config['product_name']} ({config['manufacturer']})  Member states: {', '.join(config['member_states'])}")
     for name, source in (("KEV", feeds.kev_status), ("OSV", feeds.osv_status)):
         print(f"Source {name}: {source.get('status')} - {source.get('detail')}")
     print(f"Components checked: {feeds.checked}, not checkable (UNKNOWN): {feeds.unchecked}")
+    print(f"Folders: cache={news_watcher.printable(str(args.cache))}  runs={news_watcher.printable(str(args.runs))}  "
+          f"evidence={news_watcher.printable(str(args.evidence))}")
+    if not evidence_folder_exists:
+        print("Note: the evidence folder does not exist, so no human evidence was used.")
 
     findings = result["findings"]
     by_action = {}
@@ -109,12 +147,18 @@ def _run(args):
     ):
         for finding in by_action.get(action, []):
             print(f"[{title}] {_describe(finding)}")
+    if result["packages"]:
+        print("Per package (if any version of a package is AFFECTED, the package counts as AFFECTED):")
+        for package, package_status in sorted(result["packages"].items()):
+            print(f"  {package}: {package_status}")
     if result["ignored_withdrawn"]:
         print(f"Ignored withdrawn advisories: {result['ignored_withdrawn']}")
     for warning in sbom.warnings:
         print(f"WARNING: {warning}")
 
-    complete = feeds.complete and not sbom.warnings
+    complete = feeds.complete and not sbom.warnings and result["data_gaps"] == 0
+    if result["data_gaps"]:
+        print(f"WARNING: {result['data_gaps']} finding(s) could not be judged because data was missing, cut off or unreadable.")
     report_cases = by_action.get("REPORT_CASE", [])
     needs_human = any(f["action"] != "NONE" for f in findings)
 
@@ -125,6 +169,9 @@ def _run(args):
         "report_cases": len(report_cases),
         "needs_human": needs_human,
         "product": config,
+        "sbom_sha256": sbom_sha256,
+        "folders": {"cache": str(args.cache), "runs": str(args.runs), "evidence": str(args.evidence),
+                    "evidence_folder_exists": evidence_folder_exists},
         "sources": {"kev": feeds.kev_status, "osv": feeds.osv_status},
         "components": {"checked": feeds.checked, "unchecked": feeds.unchecked},
         "sbom_warnings": sbom.warnings,
@@ -172,13 +219,13 @@ def build_parser():
     run = commands.add_parser("run", help="download public data and check the product")
     run.add_argument("--sbom", required=True, help="path to a CycloneDX JSON file")
     run.add_argument("--config", required=True, help="path to the product config JSON file")
-    run.add_argument("--cache", default="cache", help="folder for saved downloads (default: cache)")
-    run.add_argument("--runs", default="runs", help="folder for run records (default: runs)")
-    run.add_argument("--evidence", default="evidence", help="folder with human evidence files (default: evidence)")
+    run.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder for saved downloads")
+    run.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
+    run.add_argument("--evidence", default=str(PROJECT_ROOT / "evidence"), help="folder with human evidence files")
     run.set_defaults(handler=_run)
 
     status = commands.add_parser("status", help="show the state of the last runs")
-    status.add_argument("--runs", default="runs", help="folder for run records (default: runs)")
+    status.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
     status.set_defaults(handler=_status)
     return parser
 

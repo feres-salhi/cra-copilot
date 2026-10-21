@@ -45,6 +45,11 @@ BATCH_SIZE = 500  # OSV allows at most 1000 queries per batch
 MAX_PAGE_ROUNDS = 20
 MAX_KEV_DROP = 0.05  # the count may not drop by more than 5% below the highest count we have seen
 STALE_AFTER_HOURS = 26
+MIN_KEV_ENTRIES = 1000  # the real list has had far more than this for years; a tiny list is not trusted
+MAX_COUNT_VALUE = 10_000_000  # a saved "highest count" above this is ignored (a planted huge number)
+MAX_IDS_PER_PURL = 500  # OSV listing more vulnerabilities than this for one component: not trusted
+MAX_DETAIL_REQUESTS = 3000  # at most this many vulnerability records are downloaded in one run
+MAX_VERSIONS_PER_ENTRY = 20_000
 
 CVE_PATTERN = re.compile(r"CVE-[0-9]{4}-[0-9]{4,12}")
 # Vulnerability IDs go into file names, so they must match a strict pattern first.
@@ -195,6 +200,8 @@ def validate_kev(data, saved_max_count=None, saved_released=None):
     entries = data["vulnerabilities"]
     if not isinstance(entries, list) or not entries:
         return "KEV vulnerability list is missing or empty"
+    if len(entries) < MIN_KEV_ENTRIES:
+        return "KEV list is suspiciously short"
     if not isinstance(data["count"], int) or isinstance(data["count"], bool):
         return "KEV count is not a number"
     if data["count"] != len(entries):
@@ -237,15 +244,16 @@ def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
     """Download the KEV list. Returns (data_or_None, status_dict)."""
     saved, saved_meta = load_kev_cache(cache_dir)
     saved_meta = saved_meta or {}
-    saved_max = max(
-        len(saved["vulnerabilities"]) if saved else 0,
-        saved_meta.get("max_count") if isinstance(saved_meta.get("max_count"), int) else 0,
-    )
+    saved_count_value = saved_meta.get("max_count")
+    if not isinstance(saved_count_value, int) or isinstance(saved_count_value, bool) or not 0 <= saved_count_value <= MAX_COUNT_VALUE:
+        saved_count_value = 0  # a planted or damaged number is ignored
+    saved_max = max(len(saved["vulnerabilities"]) if saved else 0, saved_count_value)
     try:
         raw, data = _fetch_json(fetch, sleep, KEV_URL, None, MAX_KEV_BYTES)
         problem = validate_kev(data, saved_max or None, saved["dateReleased"] if saved else None)
         if problem:
             raise FetchError(problem)
+        data = slim_kev(data)  # keep only IDs and dates: no free text is saved
     except FetchError as error:
         if saved is not None:
             return saved, {
@@ -264,6 +272,16 @@ def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
     # One single file, so data and fingerprint can never get out of step.
     _write_json_atomic(Path(cache_dir) / "kev" / "kev-saved.json", {**meta, "data": data})
     return data, {"status": "ok", "detail": "downloaded and checked", **meta}
+
+
+def slim_kev(data):
+    """Keep only what we use from the KEV list: catalog info, CVE ids and dates. All free text is dropped."""
+    return {
+        "catalogVersion": str(data["catalogVersion"])[:40],
+        "dateReleased": data["dateReleased"],
+        "count": data["count"],
+        "vulnerabilities": [{"cveID": e["cveID"], "dateAdded": e["dateAdded"]} for e in data["vulnerabilities"]],
+    }
 
 
 def kev_cve_ids(kev_data):
@@ -364,6 +382,59 @@ def _query_purls(purls, fetch, sleep):
     return answers
 
 
+def _short_text(value, limit):
+    return value if isinstance(value, str) and len(value) <= limit else None
+
+
+def slim_osv_record(record):
+    """Keep only the facts the matcher needs. ALL free text (summary, details, references...) is dropped,
+    so it can never travel on to the report writer (PLAN.md risk 3)."""
+    slim = {"id": record["id"]}
+    truncated = False  # set when a very long list had to be cut: then "not affected" can never be trusted
+    modified = _short_text(record.get("modified"), 64)
+    if modified:
+        slim["modified"] = modified
+    for key in ("aliases", "upstream"):
+        values = record.get(key)
+        if isinstance(values, list):
+            slim[key] = [v for v in values[:200] if isinstance(v, str) and VULN_ID_PATTERN.fullmatch(v)]
+    if record.get("withdrawn"):
+        slim["withdrawn"] = True
+    affected = []
+    all_entries = record.get("affected") if isinstance(record.get("affected"), list) else []
+    truncated = truncated or len(all_entries) > 2000
+    for entry in all_entries[:2000]:
+        if not isinstance(entry, dict):
+            continue
+        package = entry.get("package") if isinstance(entry.get("package"), dict) else {}
+        item = {"package": {"ecosystem": _short_text(package.get("ecosystem"), 40),
+                            "name": _short_text(package.get("name"), 300)}}
+        ranges = []
+        all_ranges = entry.get("ranges") if isinstance(entry.get("ranges"), list) else []
+        truncated = truncated or len(all_ranges) > 100
+        for rng in all_ranges[:100]:
+            if not isinstance(rng, dict):
+                continue
+            events = []
+            all_events = rng.get("events") if isinstance(rng.get("events"), list) else []
+            truncated = truncated or len(all_events) > 2000
+            for event in all_events[:2000]:
+                if isinstance(event, dict):
+                    kept = {k: _short_text(event[k], 128) for k in ("introduced", "fixed", "last_affected") if k in event}
+                    events.append(kept)
+            ranges.append({"type": _short_text(rng.get("type"), 20), "events": events})
+        item["ranges"] = ranges
+        versions = entry.get("versions")
+        if isinstance(versions, list):
+            truncated = truncated or len(versions) > MAX_VERSIONS_PER_ENTRY
+            item["versions"] = [v for v in versions[:MAX_VERSIONS_PER_ENTRY] if isinstance(v, str) and len(v) <= 128]
+        affected.append(item)
+    slim["affected"] = affected
+    if truncated:
+        slim["truncated"] = True
+    return slim
+
+
 def _validate_vuln_record(record, vuln_id):
     if not isinstance(record, dict) or record.get("id") != vuln_id:
         return False
@@ -426,26 +497,35 @@ def fetch_osv(purls, cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now)
                 continue
             used_cache = True
             problems.append("OSV did not answer for one component; using an older saved answer")
+        if len(entries) > MAX_IDS_PER_PURL:
+            problems.append("OSV listed an unbelievable number of vulnerabilities for one component")
+            purl_vulns[purl] = None
+            continue
         purl_vulns[purl] = [v for v, _ in entries]
         for vuln_id, modified in entries:
             listed[vuln_id] = modified
 
     vulns = {}
+    downloads = 0
     for vuln_id, modified in sorted(listed.items()):
         path = _vuln_cache_path(cache_dir, vuln_id)
         saved = _read_json(path)
         if _validate_vuln_record(saved, vuln_id) and same_modified_time(saved.get("modified"), modified):
-            vulns[vuln_id] = saved  # unchanged since we saved it: no download needed
+            vulns[vuln_id] = slim_osv_record(saved)  # unchanged since we saved it: no download needed
             continue
         try:
+            downloads += 1
+            if downloads > MAX_DETAIL_REQUESTS:
+                raise FetchError("too many vulnerability records to download in one run")
             _, record = _fetch_json(fetch, sleep, OSV_VULN_URL + vuln_id, None, MAX_OSV_VULN_BYTES)
             if not _validate_vuln_record(record, vuln_id):
                 raise FetchError("OSV record is malformed")
+            record = slim_osv_record(record)
             _write_json_atomic(path, record)
             vulns[vuln_id] = record
         except FetchError:
             if _validate_vuln_record(saved, vuln_id):
-                vulns[vuln_id] = saved
+                vulns[vuln_id] = slim_osv_record(saved)
                 used_cache = True
                 problems.append("could not download details of one vulnerability; using an older saved copy")
             else:
@@ -600,9 +680,17 @@ def status_summary(run_dir, now=utc_now):
     if needs_human is True and not (isinstance(report_cases, int) and report_cases > 0):
         ok = False
         lines.append("WARNING: the latest run has findings that need a human look.")
+    data_gaps = _as_dict(last.get("result")).get("data_gaps")
+    if isinstance(data_gaps, int) and data_gaps > 0:
+        ok = False
+        lines.append(f"WARNING: {data_gaps} finding(s) in the latest run could not be judged (data missing or cut off).")
     if last.get("sbom_warnings"):
         ok = False
         lines.append("WARNING: the SBOM of the latest run had warnings (no components or no dependency list).")
+    lines.append(
+        "Note: the 26-hour warning is not a guarantee for the 24-hour reporting deadline. It can fire after the "
+        "deadline has already passed. Schedule `cra run` every 4-6 hours (see QUESTIONS.md, question 5)."
+    )
     return lines, ok
 
 
