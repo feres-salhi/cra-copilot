@@ -1,6 +1,26 @@
 # Progress Log
 
-*(A short summary for Fares will be written at the very top when the autopilot work is finished.)*
+## Summary for Fares (written when the autopilot stopped — Phase 3 was NOT started)
+
+**What is done**
+- **Phase 1** (safe foundation + SBOM reader) and **Phase 2** (download + matching) are built, tested, reviewed and committed. Nothing was pushed to GitHub; no `.env` was created.
+- You can try it from the project folder (PowerShell), using the project's own Python:
+  - `.venv\Scripts\python -m src check-sbom demo-data\demo-thermostat-sbom.json --config demo-data\demo-product-config.json` — lists the components of the fake product.
+  - `.venv\Scripts\python -m src run --sbom demo-data\demo-thermostat-sbom.json --config demo-data\demo-product-config.json` — downloads the real public data (OSV.dev and CISA KEV) and checks the product. Exit code 3 means "report case found".
+  - `.venv\Scripts\python -m src status` — shows when the last good run was, with loud warnings.
+  - Tests: `.venv\Scripts\python -m pytest`.
+- With the real data of 2026-10-21, the fake product has **two report cases** (log4j-core 2.14.1 with Log4Shell, CVE-2021-44228, and CVE-2021-45046 — both are in the KEV list); `smartheat-firmware-core` (no purl) is flagged for a human; the run is marked **RESULT INCOMPLETE** because of it. This is the intended, honest behaviour.
+
+**Test totals (real numbers):** 407 passed, 3 skipped, 0 failed. The 3 skipped tests are 2 optional live tests (switch on with `CRA_LIVE_TEST=1`; they passed when I ran them once) and 1 symlink test that this Windows account is not allowed to run.
+
+**Open questions for you** (full list with my temporary choices: `QUESTIONS.md`): #2 pin the GitHub Actions to commit codes *before the first push*; #5 run `cra run` every 4–6 hours instead of daily (the 26-hour warning can come after the 24-hour deadline); #8 the Strix scan and a real penetration test are still open; others are small and temporary.
+
+**What needs you next**
+1. Read `QUESTIONS.md` and answer #2, #5 and #8.
+2. Before the first push to GitHub: run the secrets check again (it passed twice), and pin the two GitHub Actions (QUESTIONS.md #2).
+3. Phase 3 needs the legal check of the CRA Article 14 text (PLAN.md question 7, you decided to do it with an outside reviewer) **before** I write any report text.
+4. Strix scans (Phase 1 and Phase 2): **pending**, no API budget.
+5. The penetration-tester agent's Phase 2 review was **not completed** (a safety stop); see "End of Phase 2" below.
 
 ---
 
@@ -223,5 +243,44 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - *Not changed (accepted):* `--cache/--runs/--evidence` accept any folder path you type. Only file *names* inside are fixed and safe; you are trusted with your own folders. A symlinked folder in `cache/` could redirect writes, but that needs local write access.
 
 **How it connects:** Phase 2 is now usable end to end: SBOM → public data → AFFECTED/UNKNOWN + exploited → findings and an honest status. Phase 3 will turn a report case into a draft text.
+
+---
+
+## End of Phase 2 — review meeting and secrets check
+
+**Who met:** the same three AI reviewers as in Phase 1 (security architect, penetration tester, code reviewer), two rounds, plus the secrets and credential hygiene reviewer.
+
+**Honest note about the penetration-tester review: it was NOT completed.** In round 1 the penetration-tester agent was stopped by a safety classifier while it was writing its first attack script. It ran nothing and confirmed no exploit; it only read the code and wrote down seven *hypotheses*. I did not try to push it through; instead I tested and fixed each hypothesis myself (see below). In round 2 it re-checked those seven points **by reading the code only (it ran nothing)** and called them closed or accepted. So the correct statement is: *the hypotheses of the penetration-tester agent were checked and fixed, but no real attack was run by that agent in Phase 2.* A real penetration test and the Strix scan are still open (**Strix scan pending**, no API budget — also see QUESTIONS.md #8).
+
+**Round 1 — what they found**
+- *Security architect:* (1) a crashed run left no record, so `status` kept showing an older good run — **must fix**; (2) a human evidence file that exists but is broken, and relative default folders (Task Scheduler starts programs in other folders), could silently turn "exploited" into "not exploited" — **must fix**; (3) the cache stored the full OSV text, which Phase 3 could inherit; (4) a forged alias could create a report case; (5) `status` is not tied to a product.
+- *Code reviewer:* all Phase 2 deliverables met (376 tests then; PROGRESS numbers verified: 1,754 KEV entries, 17 OSV fixtures, 18 / 29 tests in the two CLI test files). Problems: NOT_AFFECTED never comes out of the real `run` pipeline (a listed vulnerability becomes UNKNOWN if our own check disagrees) — only the rule-level function gives NOT_AFFECTED, so docs must not say the tool "clears" a version; the per-package summary was dead code; evidence files left no audit trail; `news_watcher.py` is large.
+- *Secrets reviewer:* **PASS** (details below).
+- *Penetration tester:* seven hypotheses from reading the code (cache without integrity check; unchecked numbers in the saved KEV file; no limit on work per run; slow parsing of huge version lists; weak KEV check on a first run; `related` ids not used; planted run file).
+
+**Round 2 — what I did**
+- A failed or crashed run now saves a record (`complete: false`, `error: <type>`); `status` then shows RESULT INCOMPLETE instead of the older good run.
+- Default folders are now absolute (next to the program) and printed; a missing evidence folder prints a note; an evidence file that exists but is unusable → "exploited unknown" → **URGENT HUMAN REVIEW** with the CVE listed; valid evidence leaves its link and date in the finding.
+- All saved OSV and KEV copies keep only a fixed list of fields (IDs, dates, ranges, versions). Free text (`summary`, `details`, `references`...) is dropped; older full cache files are slimmed when loaded. A test shows the real record does contain free text and the saved copy does not.
+- Limits: at most 500 vulnerabilities per component, 3,000 record downloads per run, 20,000 versions per list; a planted `max_count` is type-checked and clamped; the KEV list must have at least 1,000 entries. Every limit makes the result **incomplete** (never quietly "ok"). A list that had to be cut is marked `truncated`, and a truncated record can never give NOT_AFFECTED (rule `record_truncated`). Findings that could not be judged because data was missing are counted as `data_gaps` and make the run incomplete.
+- `cra run` prints one answer per package ("if any version is AFFECTED, the package counts as AFFECTED"); the run record stores the product, the SBOM fingerprint and the folders.
+- `status` now says in plain words that the 26-hour warning is **not** a guarantee for the 24-hour deadline.
+- Verdicts: security architect **agrees**; code reviewer **agrees** (condition: write this section — done); penetration-tester agent: hypotheses closed or accepted (read-only check).
+
+**Decisions left as they are (written down honestly)**
+- **NOT_AFFECTED is a rule-level answer only.** `cra run` never clears a vulnerability that OSV listed: if our own check disagrees with OSV, the answer is UNKNOWN (human review), as PLAN.md demands. In the real data this means: in the demo run **no finding is NOT_AFFECTED**. The 32-pair comparison above shows that the matcher agrees with OSV on pairs OSV lists (recall); it does not measure false alarms. The README must not say the tool "clears" a version.
+- *Cache and run files can be edited by anyone with write access to the project folder* (a planted record with `withdrawn`, or a planted run file) — accepted by PLAN.md section (b); fingerprints would only protect against mistakes. The README must say so.
+- *`related` ids are not used for the KEV link* (a forged link would create a false report case). A vulnerability linked to a CVE only through `related` would not match KEV.
+- *Alias link:* a KEV CVE linked only through an alias still gives a REPORT CASE (the real Log4Shell is linked this way), flagged "a human should confirm". **Phase 3 rule (to be tested then): the CVE id in a report must come from the KEV match / evidence file, never from advisory text.**
+- *The 26-hour limit is not a guarantee for the 24-hour deadline* (QUESTIONS.md #5).
+- *`news_watcher.py` is large (about 650 lines); status display and run history could move to their own file.* Not refactored now.
+- *Hash-pinned dependencies, a lockfile and `pip-audit` are not used.* The README must not claim supply-chain hardening.
+- *One test is skipped on this computer:* the symlink test (this Windows account may not create symlinks), so "a symlink that points outside is refused" is **not** proven by a test here. Two more tests are skipped on purpose (the optional live tests).
+
+**Secrets check #2 (secrets and credential hygiene reviewer): PASS.** No keys, passwords or tokens in the working files or in the 16 commits (checked before the last Phase 2 commits; the later changes added no secrets). `.env` does not exist and is ignored; `.env.example` holds only the placeholder; `cases/`, `cache/`, `runs/`, `*.pem`, `*.key` and the local settings file are ignored. The only "password" text is public advisory text inside saved fixtures. `gitleaks` itself is not installed here, so this was a pattern search (the GitHub scan will be the real one). The only environment variable read by any code is `CRA_LIVE_TEST` (in the optional live test).
+
+**Tests at the end of Phase 2:** **407 passed, 3 skipped, 0 failed** (410 collected). Per file: `test_sbom_reader` 103, `test_matcher` 100, `test_news_watcher` 84, `test_phase2_hardening` 34, `test_safe_paths` 30, `test_status_and_run_safety` 29, `test_cli_run` 18, `test_cli` 10, `test_live_optional` 2. The optional live test passed when run once on 2026-10-21 against the real sites (2 passed).
+
+**How it connects:** Phases 1 and 2 give the tool its "eyes and brain": a safe SBOM reader, careful downloads, and a matcher that says AFFECTED / NOT_AFFECTED / UNKNOWN and whether it is actively exploited — and says "RESULT INCOMPLETE" instead of guessing. Phase 3 (not started, as ordered) will turn a *report case* into German and English text.
 
 ---

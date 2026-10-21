@@ -32,6 +32,7 @@ EVIDENCE_URL = re.compile(r"https://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]{4,500}")
 
 MAX_NUMBER_DIGITS = 9  # absurdly long version numbers are not compared
 MAX_EVENTS = 10_000
+MAX_VERSIONS = 20_000
 
 
 def _list(value):
@@ -169,6 +170,8 @@ def _check_entry(entry, key, in_exact_list, parse_limit):
 
 def _check_entry_maven(entry, version):
     versions = _list(entry.get("versions"))
+    if len(versions) > MAX_VERSIONS:
+        return UNKNOWN, "version_list_too_long"
     if version in versions:
         return AFFECTED, "osv_exact_version_list"
     key = maven_version_key(version)
@@ -182,7 +185,10 @@ def _check_entry_pypi(entry, version):
     parsed = _pypi_version(version)
     if parsed is None:
         return UNKNOWN, "pypi_version_not_readable"
-    in_list = any(_pypi_version(listed) == parsed for listed in _list(entry.get("versions")))
+    listed_versions = _list(entry.get("versions"))
+    if len(listed_versions) > MAX_VERSIONS:
+        return UNKNOWN, "version_list_too_long"
+    in_list = any(_pypi_version(listed) == parsed for listed in listed_versions)
     status, rule = _check_entry(entry, parsed, in_list, _pypi_version)
     return status, {"range": "pypi_range"}.get(rule, rule)
 
@@ -231,6 +237,8 @@ def match_vulnerability(purl, record, osv_listed):
 
     check = _check_entry_maven if ecosystem == "maven" else _check_entry_pypi
     results = [check(entry, version) for entry in entries]
+    if record.get("truncated") is True and not any(status == AFFECTED for status, _ in results):
+        return UNKNOWN, "record_truncated"  # part of the record was cut off: "not affected" cannot be trusted
 
     for status, rule in results:
         if status == AFFECTED:
@@ -292,6 +300,24 @@ def read_evidence(evidence_dir, cve_id, today=None):
     return {"source_url": url, "date": day.isoformat()}
 
 
+def invalid_evidence_cves(record, evidence_dir):
+    """CVEs of this record for which a human evidence file EXISTS but cannot be used (broken, no link...).
+
+    A human wrote "this is exploited"; we must not silently treat that as "not exploited".
+    """
+    if evidence_dir is None:
+        return []
+    problems = []
+    for cve, _ in cve_ids_of(record):
+        try:
+            exists = safe_join(evidence_dir, f"{cve}.json").exists()
+        except (OSError, ValueError):
+            exists = False
+        if exists and read_evidence(evidence_dir, cve) is None:
+            problems.append(cve)
+    return problems
+
+
 def exploited_status(record, kev_ids, evidence_dir=None):
     """Return (exploited, via, cve, matched_on). Only KEV or a human evidence file can say yes.
 
@@ -325,7 +351,7 @@ def action_for(status, exploited, exploited_known=True):
 
 
 def _finding(component, vuln_id, status, rule, exploited=False, via=None, cve=None, matched_on=None,
-             cves=(), exploited_known=True):
+             cves=(), exploited_known=True, evidence=None, evidence_problem=()):
     return {
         "component": component.name,
         "version": component.version,
@@ -340,6 +366,8 @@ def _finding(component, vuln_id, status, rule, exploited=False, via=None, cve=No
         "exploited_via": via,
         "exploited_cve": cve,
         "exploited_cve_matched_on": matched_on,
+        "evidence": evidence,  # link + date of the human evidence, so the decision can be traced
+        "evidence_problem": list(evidence_problem),  # CVEs with an evidence file that could not be used
         "action": action_for(status, exploited, exploited or exploited_known),
     }
 
@@ -379,21 +407,30 @@ def evaluate(components, feeds, evidence_dir=None):
                 status, rule = match_vulnerability(component.purl, record, osv_listed=True)
                 exploited, via, cve, matched_on = exploited_status(record, feeds.kev_ids, evidence_dir)
                 cves = cve_ids_of(record)
+                evidence = read_evidence(evidence_dir, cve) if via == "evidence_file" else None
+                bad_evidence = [] if exploited else invalid_evidence_cves(record, evidence_dir)
             except (TypeError, AttributeError, ValueError, KeyError, OverflowError, RecursionError):
                 findings.append(_finding(component, vuln_id, UNKNOWN, "record_malformed", exploited_known=kev_ok))
                 continue
             findings.append(_finding(component, vuln_id, status, rule, exploited, via, cve, matched_on,
-                                     cves, exploited_known=kev_ok))
+                                     cves, exploited_known=kev_ok and not bad_evidence,
+                                     evidence=evidence, evidence_problem=bad_evidence))
     return {
         "checked": checked,
         "findings": findings,
         "ignored_withdrawn": len(ignored),
         "ignored_withdrawn_ids": ignored,
         "packages": summarize_packages(findings),
+        "data_gaps": sum(1 for f in findings if f["rule"] in DATA_GAP_RULES),
         "kev_status": feeds.kev_status.get("status"),
         "evidence_folder_given": evidence_dir is not None,
     }
 
+
+# Findings that mean "the data could not be read or was cut off": the run is then INCOMPLETE.
+DATA_GAP_RULES = {
+    "osv_gave_no_answer", "osv_details_missing", "record_malformed", "record_truncated", "version_list_too_long",
+}
 
 _ORDER = {AFFECTED: 2, UNKNOWN: 1, NOT_AFFECTED: 0}
 
