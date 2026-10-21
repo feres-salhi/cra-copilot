@@ -1,0 +1,95 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:00000000-0000-4000-8000-000000000001",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-01T00:00:00Z",
+    "component": {
+      "type": "device",
+      "bom-ref": "smartheat-x1",
+      "name": "SmartHeat X1 Thermostat",
+      "version": "1.0.0",
+      "supplier": {
+        "name": "Musterfirma Smart Home GmbH (fictional)"
+      }
+    },
+    "properties": [
+      {
+        "name": "demo-data-notice",
+        "value": "FAKE DEMO DATA. This product and company are fictional and do not exist. Only for testing CRA Copilot."
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "log4j-core-2.14.1",
+      "group": "org.apache.logging.log4j",
+      "name": "log4j-core",
+      "version": "2.14.1",
+      "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "log4j-core-2.17.1",
+      "group": "org.apache.logging.log4j",
+      "name": "log4j-core",
+      "version": "2.17.1",
+      "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.17.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "requests-2.30.0",
+      "name": "requests",
+      "version": "2.30.0",
+      "purl": "pkg:pypi/requests@2.30.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "packaging-24.1",
+      "name": "packaging",
+      "version": "24.1",
+      "purl": "pkg:pypi/packaging@24.1"
+    },
+    {
+      "type": "firmware",
+      "bom-ref": "smartheat-firmware-core-3.2.0",
+      "name": "smartheat-firmware-core",
+      "version": "3.2.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "smartheat-x1",
+      "dependsOn": [
+        "smartheat-firmware-core-3.2.0",
+        "log4j-core-2.14.1",
+        "log4j-core-2.17.1",
+        "requests-2.30.0"
+      ]
+    },
+    {
+      "ref": "smartheat-firmware-core-3.2.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "log4j-core-2.14.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "log4j-core-2.17.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "requests-2.30.0",
+      "dependsOn": [
+        "packaging-24.1"
+      ]
+    },
+    {
+      "ref": "packaging-24.1",
+      "dependsOn": []
+    }
+  ]
+}
