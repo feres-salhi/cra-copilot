@@ -394,6 +394,7 @@ def test_collect_is_not_complete_when_any_source_is_not_ok(tmp_path):
 def _run(finished, statuses):
     return {
         "finished_at": finished.isoformat(),
+        "complete": all(s == "ok" for s in statuses.values()),
         "sources": {name: {"status": s, "detail": f"{name} is {s}"} for name, s in statuses.items()},
     }
 

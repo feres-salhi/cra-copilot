@@ -195,3 +195,33 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 **How it connects:** this is the "brain" of Part 3. Its output (a list of findings with an action) is what Phase 3 will turn into a report draft, and what `cra run` prints now.
 
 ---
+
+## Piece 8 — `cra run`, `cra status` and the optional live test (Phase 2)
+
+**What I built:** two new commands in `src/cli.py`.
+- `python -m src run --sbom <file> --config <file>` reads the SBOM, downloads the public data, checks every component, prints the findings and saves the run in `runs/`. Exit codes: **0** complete and nothing to do, **1** RESULT INCOMPLETE or a human must look, **2** input rejected, **3** at least one *report case* (affected AND actively exploited). It prints "No exploited vulnerabilities found…" **only** when all sources are ok, every component was really checked and the SBOM had no warnings. It always prints "KEV is a floor, not a ceiling" and "Nothing was sent. A human decides what happens next." — there is no send function.
+- `python -m src status` shows the last fully successful run, and warns loudly if it is more than 26 hours old, if the latest run was incomplete, if components could not be checked, or if it found report cases.
+- An **optional live test** (`tests/test_live_optional.py`): skipped normally; with `CRA_LIVE_TEST=1` it talks to the real OSV.dev and CISA KEV. I ran it once: **2 passed** (real KEV downloaded and validated and contains Log4Shell; real OSV lists Log4Shell for log4j-core 2.14.1). That proves the real download code (certificate checks, no redirects, size/length checks) works against the real sites, not just against fakes.
+
+**Example (fake internet serving the real saved data) for the demo product:** two REPORT CASES on log4j-core 2.14.1 — CVE-2021-44228 (Log4Shell) and CVE-2021-45046, both in KEV; `smartheat-firmware-core` flagged for a human (no purl); requests 2.30.0 recorded (affected, not in KEV); the run is marked RESULT INCOMPLETE because one component cannot be checked; exit code 3.
+
+**New words**
+- *Exit code* — see Piece 5.
+- *Report case* — our name for "affected AND actively exploited": the situation where the 24-hour early warning may be due.
+- *Safety net* — a catch-all that turns an unexpected error into a clear message instead of a crash.
+- *Atomic write* — writing a file so you either get the whole new file or the old one, never half a file.
+
+**Tests:** `tests/test_cli_run.py` (18) and `tests/test_status_and_run_safety.py` (28) plus changes to older tests. They cover: the Log4Shell report case, failed KEV (never "quiet recorded"), OSV 429 forever, a clean product getting the all-clear, evidence file, bad SBOM rejected before any download, second run downloads less, the 26-hour warning, damaged and hostile run files, terminal escape characters in saved files, unwritable folders.
+
+**Reviewer findings and what I did**
+- *Reviewer + auditor:* an unwritable `runs/` or `cache/` folder (or an unexpected error) ended in a raw traceback and exit 1; the report case would have been hidden. **Fixed:** findings are printed before saving; a failed save prints "RUN NOT SAVED"; report cases still give exit 3; unexpected errors print "RESULT INCOMPLETE (internal error: <type>)" without the error text (which could contain paths).
+- *Reviewer + auditor:* `status` called an incomplete run "all sources ok" and let it reset the 26-hour clock; `status` ignored report cases. **Fixed:** every run now stores `complete`, `report_cases` and `needs_human`; a run without the `complete` flag never counts as complete; `status` warns about report cases, human-review findings and SBOM warnings.
+- *Reviewer:* the exit code of `status` depended on the word "WARNING" in the text. **Fixed** (`status_summary` returns the answer separately).
+- *Reviewer + auditor:* a damaged or hostile run file crashed `status`, and its text could contain terminal escape codes. **Fixed** (type checks everywhere; `printable()` replaces control characters; a run dated far in the future never counts as "all ok").
+- *Auditor (low):* the temp file for saving had a fixed name (a symlink trick). **Fixed** (random exclusive temp file). Only the newest 1,000 run files are read.
+- *Reviewer:* one test could never fail (a loop over an empty list). **Fixed** and made non-vacuous.
+- *Not changed (accepted):* `--cache/--runs/--evidence` accept any folder path you type. Only file *names* inside are fixed and safe; you are trusted with your own folders. A symlinked folder in `cache/` could redirect writes, but that needs local write access.
+
+**How it connects:** Phase 2 is now usable end to end: SBOM → public data → AFFECTED/UNKNOWN + exploited → findings and an honest status. Phase 3 will turn a report case into a draft text.
+
+---
