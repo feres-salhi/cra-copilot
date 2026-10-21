@@ -2,20 +2,48 @@
 
 Rule: when we are not sure about a component, it becomes UNKNOWN.
 It is never treated as "safe".
+
+The SBOM file is treated as possibly hostile:
+- a file that is too big, too deep, has too many components or has
+  duplicate JSON keys is rejected as a whole;
+- a component with a strange name, version or purl becomes UNKNOWN
+  (only that component), and the strange text is not kept.
 """
 
 import json
 import re
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from packageurl import PackageURL
 
 SUPPORTED_ECOSYSTEMS = {"pypi", "maven"}
 
+MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_DEPTH = 32
+MAX_COMPONENTS = 5000
+MAX_TEXT_LENGTH = 256
+
+# Strict allowed characters (plain ASCII only, no spaces, no control characters).
+NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+:@/~-]*")
+VERSION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~!-]*")
+# No %, ?, # in a purl: no hidden escapes, no qualifiers, no subpath.
+PURL_PATTERN = re.compile(r"pkg:[A-Za-z0-9._+~:/@!-]+")
+PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-zÄÖÜäöüß0-9][A-Za-zÄÖÜäöüß0-9 ._,&()+-]*")
+
+EU_MEMBER_STATES = {
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE",
+    "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE",
+}
+
 
 class SbomError(Exception):
     """The whole SBOM file is rejected."""
+
+
+class ConfigError(Exception):
+    """The product config file is rejected."""
 
 
 @dataclass
@@ -28,34 +56,58 @@ class Component:
     reason: str | None = None  # only set when status is "UNKNOWN"
 
 
-def _text(value):
-    """Return value if it is a non-empty string, otherwise None."""
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+@dataclass
+class SbomResult:
+    components: list
+    warnings: list = field(default_factory=list)
+
+
+def _clean(value, pattern):
+    """Return (text, problem). problem is None, "missing" or "invalid".
+
+    Only plain spaces around the text are trimmed. Anything else odd
+    (line breaks, control characters, non-ASCII, too long) is "invalid".
+    """
+    if value is None:
+        return None, "missing"
+    if not isinstance(value, str):
+        return None, "invalid"
+    text = value.strip(" ")
+    if not text:
+        return None, "missing"
+    if len(text) > MAX_TEXT_LENGTH or not pattern.fullmatch(text):
+        return None, "invalid"
+    return text, None
 
 
 def _same_name(ecosystem, name_a, name_b):
-    """PyPI treats Requests, requests and re_quests-style names as the same."""
+    """PyPI treats Requests, requests and typing_extensions/typing-extensions as the same."""
     if ecosystem == "pypi":
-        return re.sub(r"[-_.]+", "-", name_a).lower() == re.sub(r"[-_.]+", "-", name_b).lower()
+        normalize = lambda n: re.sub(r"[-_.]+", "-", n).lower()
+        return normalize(name_a) == normalize(name_b)
     return name_a == name_b
 
 
 def _read_component(raw):
-    name = _text(raw.get("name"))
-    version = _text(raw.get("version"))
-    purl = _text(raw.get("purl"))
+    purl, purl_problem = _clean(raw.get("purl"), PURL_PATTERN)
+    version, version_problem = _clean(raw.get("version"), VERSION_PATTERN)
+    name, name_problem = _clean(raw.get("name"), NAME_PATTERN)
 
     def unknown(reason, ecosystem=None):
         return Component(name, version, purl, ecosystem, "UNKNOWN", reason)
 
-    if purl is None:
+    if purl_problem == "missing":
         return unknown("no purl")
-    if version is None:
+    if purl_problem:
+        return unknown("invalid purl")
+    if version_problem == "missing":
         return unknown("no version")
-    if name is None:
+    if version_problem:
+        return unknown("invalid version")
+    if name_problem == "missing":
         return unknown("no name")
+    if name_problem:
+        return unknown("invalid name")
 
     try:
         parsed = PackageURL.from_string(purl)
@@ -69,22 +121,84 @@ def _read_component(raw):
     # The purl is the identity the matcher will use, so it must agree with the fields.
     if not parsed.name or not parsed.version:
         return unknown("purl has no name or version", ecosystem)
+    if parsed.qualifiers or parsed.subpath:
+        return unknown("purl has qualifiers or a subpath", ecosystem)
     if ecosystem == "maven" and not parsed.namespace:
         return unknown("maven purl has no namespace", ecosystem)
+    if ecosystem == "pypi" and parsed.namespace:
+        return unknown("pypi purl must not have a namespace", ecosystem)
+    names = [parsed.name] + ([parsed.namespace] if parsed.namespace else [])
+    if not all(NAME_PATTERN.fullmatch(n) for n in names) or not VERSION_PATTERN.fullmatch(parsed.version):
+        return unknown("purl parts have invalid characters", ecosystem)
     if not _same_name(ecosystem, parsed.name, name):
         return unknown("purl name does not match name", ecosystem)
     if parsed.version != version:
         return unknown("purl version does not match version", ecosystem)
 
-    return Component(name, version, purl, ecosystem, "OK")
+    # Keep the canonical purl (rebuilt by the library), not the raw text.
+    return Component(name, version, parsed.to_string(), ecosystem, "OK")
 
 
-def read_sbom(path):
-    """Read a CycloneDX JSON file and return a list of Component objects."""
+def _reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise SbomError("duplicate key in JSON object")
+        result[key] = value
+    return result
+
+
+def _check_depth(text):
+    """Reject text whose [] / {} nesting is deeper than MAX_DEPTH.
+
+    This runs BEFORE json.loads, so a very deep file cannot crash the parser.
+    Brackets inside quoted strings are ignored.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_DEPTH:
+                raise SbomError(f"JSON is nested deeper than {MAX_DEPTH} levels")
+        elif char in "]}":
+            depth -= 1
+
+
+def _load_json(path):
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as error:  # ValueError covers bad JSON/UTF-8
+        file_path = Path(path)
+        if file_path.stat().st_size > MAX_FILE_BYTES:
+            raise SbomError(f"SBOM file is larger than {MAX_FILE_BYTES} bytes")
+        raw_bytes = file_path.read_bytes()
+        if len(raw_bytes) > MAX_FILE_BYTES:
+            raise SbomError(f"SBOM file is larger than {MAX_FILE_BYTES} bytes")
+        text = raw_bytes.decode("utf-8-sig")
+    except (OSError, ValueError, TypeError) as error:
         raise SbomError(f"cannot read SBOM file: {error}") from error
+
+    _check_depth(text)
+    try:
+        return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except RecursionError as error:
+        raise SbomError("JSON is nested too deeply") from error
+    except ValueError as error:
+        raise SbomError(f"SBOM is not valid JSON: {error}") from error
+
+
+def load_sbom(path):
+    """Read a CycloneDX JSON file. Returns an SbomResult (components + warnings)."""
+    data = _load_json(path)
 
     if not isinstance(data, dict):
         raise SbomError("SBOM must be a JSON object")
@@ -93,16 +207,65 @@ def read_sbom(path):
 
     # Components can contain components (nested). Walk them all, without recursion.
     components = []
-    to_visit = [data.get("components", [])]
+    to_visit = deque([data.get("components", [])])
     while to_visit:
-        raw_list = to_visit.pop(0)
+        raw_list = to_visit.popleft()
         if not isinstance(raw_list, list):
             raise SbomError('"components" must be a list')
         for item in raw_list:
             if not isinstance(item, dict):
                 raise SbomError("every component must be a JSON object")
+            if len(components) >= MAX_COMPONENTS:
+                raise SbomError(f"SBOM has more than {MAX_COMPONENTS} components")
             components.append(_read_component(item))
             if "components" in item:
                 to_visit.append(item["components"])
 
-    return components
+    warnings = []
+    if not components:
+        warnings.append("SBOM has no components: nothing could be checked")
+    if not data.get("dependencies"):
+        warnings.append("SBOM has no dependency list: the tool cannot see every component")
+    return SbomResult(components, warnings)
+
+
+def read_sbom(path):
+    """Read a CycloneDX JSON file and return only the list of Component objects."""
+    return load_sbom(path).components
+
+
+def read_product_config(path):
+    """Read the product config. Returns a dict with product_name, manufacturer, member_states."""
+    try:
+        raw_bytes = Path(path).read_bytes()
+        if len(raw_bytes) > 64 * 1024:
+            raise ConfigError("config file is too large")
+        text = raw_bytes.decode("utf-8-sig")
+        _check_depth(text)
+        data = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except SbomError as error:  # duplicate keys or too deep
+        raise ConfigError(str(error)) from error
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        raise ConfigError(f"cannot read config file: {error}") from error
+
+    if not isinstance(data, dict):
+        raise ConfigError("config must be a JSON object")
+
+    product_name, problem = _clean(data.get("product_name"), PRODUCT_NAME_PATTERN)
+    if problem:
+        raise ConfigError("product_name is missing or has invalid characters")
+    manufacturer, problem = _clean(data.get("manufacturer"), PRODUCT_NAME_PATTERN)
+    if problem:
+        raise ConfigError("manufacturer is missing or has invalid characters")
+
+    states = data.get("member_states")
+    if not isinstance(states, list) or not all(isinstance(s, str) for s in states):
+        raise ConfigError("member_states must be a list of two-letter country codes")
+    if not states:
+        raise ConfigError("member_states is empty: at least one EU country is needed")
+    if any(s not in EU_MEMBER_STATES for s in states):
+        raise ConfigError("member_states contains a code that is not an EU member state")
+    if len(set(states)) != len(states):
+        raise ConfigError("member_states contains a duplicate")
+
+    return {"product_name": product_name, "manufacturer": manufacturer, "member_states": states}
