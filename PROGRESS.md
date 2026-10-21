@@ -26,7 +26,10 @@
 **Update, 2026-10-21 (after the autopilot stopped) — recorded from Fares**
 - **Decisions:** QUESTIONS.md #2 (pin GitHub Actions to exact commit SHAs before the first push), #5 (run `cra run` every 4 hours with Windows Task Scheduler, to be set up in Phase 4) and #8 (free Google Gemini API key for Strix scans in quick mode; Phase 1 and 2 scans run once the key exists, until then pending) are marked DECIDED. New section "Later improvements (after Phase 3)" in QUESTIONS.md.
 - **Real current test total, run by Fares himself on 2026-10-21: 407 passed, 3 skipped** — the same as my own count above. His proof screenshots are in `screenshots/`: `01a-design-meeting-plan.png`, `01b-design-meeting-risks.png`, `02-all-tests-pass.png`, `03-first-live-run-log4shell.png`.
-- **What I checked in the screenshots:** I opened 02 and 03. The pytest result ("407 passed, 3 skipped in 7.85s") is in **03**; **02** shows a real `cra run` output (two report cases for log4j-core 2.14.1, the firmware component flagged UNKNOWN, "RESULT INCOMPLETE", "Nothing was sent"). So the file names of 02 and 03 look swapped. I did not rename them. I did not open 01a and 01b, so I only know them by their names.
+- **What the screenshots show (I opened 02 and 03):**
+  - `02-all-tests-pass.png` shows the pytest run in PowerShell: "407 passed, 3 skipped in 7.85s".
+  - `03-first-live-run-log4shell.png` shows a real `cra run` output: two report cases for log4j-core 2.14.1 (CVE-2021-45046 and CVE-2021-44228, both in KEV), the firmware component flagged UNKNOWN, "RESULT INCOMPLETE", and "Nothing was sent".
+  - I did not open `01a` and `01b`, so I only know them by their names.
 
 ---
 
