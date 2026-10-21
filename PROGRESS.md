@@ -108,3 +108,90 @@
 **How it connects:** Phase 1 is the safe front door: nothing hostile or unclear gets past the SBOM reader as "OK", and the path helper protects all later file writing.
 
 ---
+
+## Piece 6 — News watcher `src/news_watcher.py` (Phase 2)
+
+**What I built:** the part that downloads public vulnerability data from two free sources, without any key: **OSV.dev** (which vulnerabilities hit which package versions) and the **CISA KEV list** (vulnerabilities known to be used in real attacks). Everything is saved on disk in `cache/`; each run writes a status file in `runs/`. The most important rule: **a failed or half-finished download can never look like "nothing new"**. Each source is `ok` (fresh), `stale` (we had to use an older saved copy) or `failed`. A component OSV did not answer about becomes UNKNOWN, never "no vulnerabilities".
+
+**Real data used for the tests (saved in `tests/fixtures/`):** the full CISA KEV list downloaded on 2026-10-21 (1,754 entries, catalog version 2026.10.20) and 17 real OSV records plus one real OSV batch answer for the demo components. Tests use a *fake internet* that serves these saved copies, so no test needs the real internet.
+
+**Things from PLAN.md marked "(to verify)" that I checked against this real data**
+- OSV batch answers contain only IDs (and a `modified` time), details need a second request per ID — **true**.
+- Log4Shell (CVE-2021-44228) is in KEV, `dateAdded` **2021-12-10** — **true**.
+- CVE-2021-45046 **is** in KEV (added 2023-05-01) — the plan did not know this.
+- CVE-2023-32681 (requests) is **not** in KEV — true.
+- Log4Shell's OSV record (GHSA-jfh8-c2jp-5v3q) has three affected ranges: 2.13.0–2.15.0, 2.0-beta9–2.3.1 and 2.4–2.12.2 (the Java 7 branch), and the exact-version list contains `2.0-beta9` — true.
+- CVE-2021-45046 is fixed in 2.16.0 (and 2.12.2 on the old branch) — true.
+- requests: fixed in 2.31.0 — true.
+- **A surprise the plan did not know:** OSV also lists newer, real vulnerabilities for `log4j-core 2.17.1` (for example CVE-2026-34480, CVE-2026-34477, CVE-2025-68161). So in today's data even the "fixed" 2.17.1 is not clean. The Log4Shell *test* is still right (2.17.1 is not affected by Log4Shell).
+- **A quirk in OSV's data:** the same `modified` time has 6 decimals in a batch answer and 9 in a full record. My first "unchanged since last time" check never matched; found by a test and fixed.
+
+**New words**
+- *Fixture* — a saved copy of real data that tests use instead of the internet.
+- *Cache* — a folder of saved downloads, so we can fall back to them.
+- *Stale* — data that is old because the new download failed.
+- *Retry / backoff* — trying a failed download again after waiting a little, a bit longer each time (1, 2, 4 seconds).
+- *HTTP 429* — the server's way of saying "you ask too often".
+- *Pagination* — an answer that comes in pages; you must ask for every page.
+- *sha256 fingerprint* — a long code computed from a file; any change in the file changes the code.
+- *Replay* — someone feeding the tool an old, genuine file to make it think nothing is new.
+- *Redirect* — a server telling you "go to this other address"; we refuse them.
+
+**Tests:** `tests/test_news_watcher.py` — see the totals in the phase summary below. Examples: 429 retried then OK; 429 forever → failed (never "empty"); cut-off download retried; KEV with a missing field / wrong count / drop above 5% / old release date / duplicate IDs rejected; stale fallback marks `stale`; many pages; more than 500 components in chunks; IDs like `../../x` rejected; Windows device names never become file names; the 26-hour warning; "RESULT INCOMPLETE" text.
+
+**Reviewer findings and what I did**
+- *Both:* components that were never asked about (no purl / UNKNOWN) and an empty list still gave OSV status `ok`. **Fixed:** the run now counts `checked` and `unchecked`; `complete` is true only if all sources are ok **and** nothing was skipped **and** at least one component was checked.
+- *Reviewer:* some download errors (cut-off body, `IncompleteRead`) escaped as raw errors and skipped the stale fallback. **Fixed** (all converted to a download failure; answer shorter than `Content-Length` counts as failed; cut-off JSON is retried).
+- *Reviewer:* KEV date fields were only checked for presence; a replayed older list was accepted. **Fixed** (`dateReleased` must be a real time with time zone and not older than the saved copy; `dateAdded` must be a real date; duplicate IDs rejected; the 5% drop is measured against the highest count ever seen, so slow shrinking is caught).
+- *Reviewer:* `status` could crash on a run file with a time without time zone, show "-1 hours ago", or pick the wrong "latest" run (file `…Z-2.json` sorted before `…Z.json`). **Fixed** (all three; a test found the sort bug).
+- *Reviewer:* saved KEV file's fingerprint did not match the saved bytes. **Fixed** (data and fingerprint are in one file).
+- *Auditor:* only port 443 should be allowed; one slow server could stall a run. **Fixed** (port check; 120-second limit for a whole download).
+- *Auditor:* Windows device names (`CON`, `NUL`) as file names. **Fixed** (`osv-` prefix plus the shared safe path helper).
+- *Not changed (accepted, as PLAN.md already says):* a local person who edits files in `cache/` can plant a fake saved record; fingerprints on every load were cut from v1 as "overkill". Honest limit: the cache protects against *mistakes*, not against a dishonest person on the same computer.
+- *Not changed:* the tool still honours a proxy setting from the environment (HTTPS_PROXY); I left that as normal user configuration.
+- *For Phase 3:* free text in OSV/KEV records (summaries, descriptions) is stored unchanged. It must never reach the AI; Part 4 must only use the validated IDs.
+
+**How it connects:** this is the "eyes" of the tool. It brings in the facts; the matcher (next) decides what they mean.
+
+---
+
+## Piece 7 — Matcher `src/matcher.py` (Phase 2)
+
+**What I built:** plain code that answers, for each component and each vulnerability OSV lists for it: **AFFECTED / NOT_AFFECTED / UNKNOWN**, with the rule that gave the answer — and whether the vulnerability is **actively exploited** (only if it is in the KEV list, or a human has written an evidence file `evidence/<CVE>.json` with a link and a date). Rules from PLAN.md: versions are never compared as text; PyPI uses PEP 503 names and the `packaging` library; Maven checks the exact-version list first, then compares plain numbers (a limit like `2.0-beta9` counts as "just below 2.0"), anything else is UNKNOWN; if OSV says "affected" but our own check disagrees the answer is UNKNOWN (never silently NOT_AFFECTED); withdrawn advisories are ignored; git-commit ranges give UNKNOWN. Actions: AFFECTED + exploited → report case; UNKNOWN + exploited → urgent human review; AFFECTED not exploited → recorded.
+
+**The plan's known real cases, checked against the saved real data (all pass as tests)**
+| Case | Result |
+|---|---|
+| log4j-core 2.14.1 + Log4Shell | AFFECTED, in KEV → report case |
+| log4j-core 2.17.1 + Log4Shell (our own range check) | NOT_AFFECTED |
+| log4j-core 2.0-beta9 + Log4Shell | AFFECTED (via the exact-version list) |
+| log4j-core 2.15.0 | not affected by Log4Shell, **affected by CVE-2021-45046, which is in KEV** → report case |
+| requests 2.30.0 + CVE-2023-32681 | AFFECTED, not in KEV → recorded, no report |
+| requests 2.31.0 | NOT_AFFECTED (a git-commit range in the second advisory gives UNKNOWN there) |
+
+I also compared the matcher with OSV on all 6 real batch answers (36 listed vulnerability/component pairs): the matcher says AFFECTED for every one OSV lists — no disagreement.
+
+**New words**
+- *Rule* — the short name of the reason for an answer (e.g. `osv_exact_version_list`).
+- *Range (introduced / fixed / last_affected)* — OSV's way of saying "affected from version A up to, but not including, B".
+- *Alias* — another ID of the same vulnerability (the GitHub advisory number and the CVE number).
+- *Evidence file* — a small file a human writes to say "this is exploited, here is my source and the date".
+- *PEP 503* — Python's standard rule for treating `Foo_Bar` and `foo-bar` as the same package name.
+- *Pre-release / local version* — `2.0rc1` is a test version before 2.0; `1.0+abc` is a company's own build of 1.0.
+
+**Reviewer findings and what I did (all fixed unless noted)**
+- *Auditor (high):* if the KEV download failed, "not in the list" silently became "not exploited" → an affected component would be only "recorded". **Fixed:** findings carry `exploited_known`; when KEV is not fresh and nothing proves exploitation, the action becomes **URGENT_HUMAN_REVIEW**. If a stale KEV copy does say exploited, it still counts.
+- *Reviewer:* a vendor build `1.0+abc` of a vulnerable `1.0` was judged NOT_AFFECTED. **Fixed.**
+- *Reviewer:* range events in the wrong order lost an earlier range. **Fixed** (events are sorted first).
+- *Reviewer:* an empty range, a SEMVER range or an entry with no data gave NOT_AFFECTED ("silent safe"). **Fixed:** they give UNKNOWN (`no_usable_range` / `range_type_not_supported`).
+- *Reviewer:* `pkg:npm/...` could match a PyPI record; a Maven purl without a group became the name "None:a". **Fixed** (UNKNOWN `unsupported_package`).
+- *Reviewer:* a CVE written in lower case or listed only as `upstream` was missed. **Fixed.**
+- *Auditor:* odd record shapes (a number instead of a list...) crashed the whole run; a text `versions` field was searched by substring. **Fixed:** wrong shapes are treated as empty/UNKNOWN; every record is evaluated in a safety net that emits UNKNOWN `record_malformed`.
+- *Auditor:* evidence files accepted future dates and compact dates. **Fixed.**
+- *Auditor (medium):* a hostile OSV record could list a KEV CVE as an *alias* of an unrelated advisory and forge "exploited". **Partly mitigated:** each finding says whether the CVE came from the record `id`, an `alias` or `upstream` (`exploited_cve_matched_on`), so a human can see. Honest limit: if OSV itself were compromised, the tool would believe it.
+- *Reviewer note, kept on purpose:* `evaluate()` always tells the matcher "OSV listed this", so a listed vulnerability that our check rejects becomes UNKNOWN, never NOT_AFFECTED. This is the PLAN.md rule; the cost is more human review, e.g. a patched version that OSV still lists.
+- *Auditor:* hostile text from OSV (`summary`, `details`) can never reach a finding — only validated IDs, fixed rule names and component fields. A test checks this.
+
+**How it connects:** this is the "brain" of Part 3. Its output (a list of findings with an action) is what Phase 3 will turn into a report draft, and what `cra run` prints now.
+
+---
