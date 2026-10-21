@@ -429,3 +429,10 @@ def test_component_limit_also_counts_nested_components(tmp_path, monkeypatch):
     path = _write_sbom(tmp_path, {"bomFormat": "CycloneDX", "components": [outer]})
     with pytest.raises(SbomError, match="more than"):
         read_sbom(path)
+
+
+def test_a_folder_instead_of_a_file_is_rejected(tmp_path):
+    with pytest.raises(SbomError):
+        read_sbom(tmp_path)
+    with pytest.raises(ConfigError):
+        read_product_config(tmp_path)
