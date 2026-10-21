@@ -211,7 +211,7 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - *Safety net* — a catch-all that turns an unexpected error into a clear message instead of a crash.
 - *Atomic write* — writing a file so you either get the whole new file or the old one, never half a file.
 
-**Tests:** `tests/test_cli_run.py` (18) and `tests/test_status_and_run_safety.py` (28) plus changes to older tests. They cover: the Log4Shell report case, failed KEV (never "quiet recorded"), OSV 429 forever, a clean product getting the all-clear, evidence file, bad SBOM rejected before any download, second run downloads less, the 26-hour warning, damaged and hostile run files, terminal escape characters in saved files, unwritable folders.
+**Tests:** `tests/test_cli_run.py` (18) and `tests/test_status_and_run_safety.py` (29) plus changes to older tests. They cover: the Log4Shell report case, failed KEV (never "quiet recorded"), OSV 429 forever, a clean product getting the all-clear, evidence file, bad SBOM rejected before any download, second run downloads less, the 26-hour warning, damaged and hostile run files, terminal escape characters in saved files, unwritable folders.
 
 **Reviewer findings and what I did**
 - *Reviewer + auditor:* an unwritable `runs/` or `cache/` folder (or an unexpected error) ended in a raw traceback and exit 1; the report case would have been hidden. **Fixed:** findings are printed before saving; a failed save prints "RUN NOT SAVED"; report cases still give exit 3; unexpected errors print "RESULT INCOMPLETE (internal error: <type>)" without the error text (which could contain paths).
