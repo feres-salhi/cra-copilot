@@ -17,6 +17,7 @@ import http.client
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -141,10 +142,19 @@ def _fetch_json(fetch, sleep, url, body=None, max_bytes=MAX_OSV_VULN_BYTES):
 
 
 def _write_json_atomic(path, data):
+    """Write the file in one piece: a temp file with a random name, then rename it into place."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(temp, path)
+    handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as temp:
+            temp.write(json.dumps(data, indent=2, sort_keys=True))
+        os.replace(temp_name, path)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _read_json(path):
@@ -493,58 +503,109 @@ def save_run(run_dir, run, now=utc_now):
 
 
 def run_is_complete(run):
-    """True if every download source was ok in this run."""
-    sources = run.get("sources", {})
-    return bool(sources) and all(s.get("status") == "ok" for s in sources.values())
+    """True only if the run said it was complete AND every download source was ok.
+
+    A run file without the "complete" flag (or a damaged one) never counts as complete.
+    """
+    if not isinstance(run, dict) or run.get("complete") is not True:
+        return False
+    sources = run.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        return False
+    return all(isinstance(s, dict) and s.get("status") == "ok" for s in sources.values())
+
+
+MAX_RUN_FILES = 1000
 
 
 def load_runs(run_dir):
     """Return all readable run files as a list of dicts, oldest first (by their finished_at time)."""
     runs = []
-    for path in Path(run_dir).glob("*.json"):
+    paths = sorted(Path(run_dir).glob("*.json"))[-MAX_RUN_FILES:]
+    for path in paths:
         data = _read_json(path)
         if isinstance(data, dict) and isinstance(data.get("finished_at"), str):
-            runs.append((_parse_time(data["finished_at"]), path.stem, data))  # stem: "...Z" sorts before "...Z-0002"
+            runs.append((_parse_time(data["finished_at"]), path.stem, data))
     # Runs whose time cannot be read sort first and are never used as "the latest".
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     runs.sort(key=lambda item: (item[0] or epoch, item[1]))
     return [data for _, _, data in runs]
 
 
-def status_report(run_dir, now=utc_now):
-    """Return the text lines for `cra status`, with loud warnings."""
+def printable(value, limit=200):
+    """Make any text from a saved file safe to show: control characters become '?'."""
+    text = value if isinstance(value, str) else repr(value)
+    return "".join(c if c.isprintable() else "?" for c in text)[:limit]
+
+
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def status_summary(run_dir, now=utc_now):
+    """Return (lines, ok) for `cra status`. ok is False if anything deserves a warning."""
     runs = load_runs(run_dir)
     if not runs:
-        return ["WARNING: no run found yet. Nothing has been checked. Run `cra run` first."]
+        return ["WARNING: no run found yet. Nothing has been checked. Run `cra run` first."], False
     lines = []
+    ok = True
     current = now()
     last = runs[-1]
     good = [r for r in runs if run_is_complete(r) and _parse_time(r["finished_at"]) is not None]
     if not good:
+        ok = False
         lines.append("WARNING: there has never been a fully successful run.")
     else:
         finished = _parse_time(good[-1]["finished_at"])
         age = current - finished
         if age < timedelta(0):
+            ok = False
             lines.append(
-                f"WARNING: the last successful run is dated in the future ({good[-1]['finished_at']}). "
+                f"WARNING: the last successful run is dated in the future ({printable(good[-1]['finished_at'])}). "
                 "Is the computer clock wrong? Do not rely on the age."
             )
         else:
-            lines.append(f"Last successful run: {good[-1]['finished_at']} ({int(age.total_seconds() // 3600)} hours ago)")
+            lines.append(
+                f"Last successful run: {printable(good[-1]['finished_at'])} ({int(age.total_seconds() // 3600)} hours ago)"
+            )
             if age > timedelta(hours=STALE_AFTER_HOURS):
+                ok = False
                 lines.append(
                     f"WARNING: the last successful run was more than {STALE_AFTER_HOURS} hours ago. "
                     "Is the scheduler still running? New exploited vulnerabilities may be missing."
                 )
-    if run_is_complete(last) and _parse_time(last["finished_at"]) is not None:
+    last_time = _parse_time(last["finished_at"])
+    if run_is_complete(last) and last_time is not None and last_time <= current:
         lines.append("Latest run: all sources ok.")
     else:
+        ok = False
         lines.append("WARNING: RESULT INCOMPLETE - the latest run was not fully successful. Do not rely on it.")
-        for name, source in sorted(last.get("sources", {}).items()):
+        for name, source in sorted(_as_dict(last.get("sources")).items()):
+            source = _as_dict(source)
             if source.get("status") != "ok":
-                lines.append(f"  {name}: {source.get('status')} - {source.get('detail')}")
-    unchecked = (last.get("components") or {}).get("unchecked")
+                lines.append(f"  {printable(name, 20)}: {printable(source.get('status'), 20)} - {printable(source.get('detail'))}")
+    components = _as_dict(last.get("components"))
+    unchecked = components.get("unchecked")
     if isinstance(unchecked, int) and unchecked > 0:
+        ok = False
         lines.append(f"WARNING: {unchecked} component(s) could NOT be checked in the latest run (UNKNOWN). A human must look.")
-    return lines
+    report_cases = last.get("report_cases")
+    if isinstance(report_cases, int) and report_cases > 0:
+        ok = False
+        lines.append(
+            f"WARNING: the latest run found {report_cases} REPORT CASE finding(s) "
+            "(affected AND actively exploited). Check the 24-hour deadline."
+        )
+    needs_human = last.get("needs_human")
+    if needs_human is True and not (isinstance(report_cases, int) and report_cases > 0):
+        ok = False
+        lines.append("WARNING: the latest run has findings that need a human look.")
+    if last.get("sbom_warnings"):
+        ok = False
+        lines.append("WARNING: the SBOM of the latest run had warnings (no components or no dependency list).")
+    return lines, ok
+
+
+def status_report(run_dir, now=utc_now):
+    """Return only the text lines for `cra status`."""
+    return status_summary(run_dir, now)[0]
