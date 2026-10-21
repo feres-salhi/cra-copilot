@@ -13,14 +13,20 @@
 
 **Test totals (real numbers):** 407 passed, 3 skipped, 0 failed. The 3 skipped tests are 2 optional live tests (switch on with `CRA_LIVE_TEST=1`; they passed when I ran them once) and 1 symlink test that this Windows account is not allowed to run.
 
-**Open questions for you** (full list with my temporary choices: `QUESTIONS.md`): #2 pin the GitHub Actions to commit codes *before the first push*; #5 run `cra run` every 4–6 hours instead of daily (the 26-hour warning can come after the 24-hour deadline); #8 the Strix scan and a real penetration test are still open; others are small and temporary.
+**Open questions** (full list with my temporary choices: `QUESTIONS.md`): when this summary was written, #2 (pin the GitHub Actions to commit codes *before the first push*), #5 (run `cra run` more often than daily, because the 26-hour warning can come after the 24-hour deadline) and #8 (Strix scan and a real penetration test) were open. **All three were decided by Fares on 2026-10-21** (see the update below). The other rows are small and temporary.
 
 **What needs you next**
-1. Read `QUESTIONS.md` and answer #2, #5 and #8.
-2. Before the first push to GitHub: run the secrets check again (it passed twice), and pin the two GitHub Actions (QUESTIONS.md #2).
+1. Read `QUESTIONS.md`. Questions #2, #5 and #8 are now **decided by Fares (2026-10-21)**; the other rows are small temporary choices.
+2. Before the first push to GitHub: run the secrets check again (it passed twice), and pin all GitHub Actions to exact commit SHAs (decided, QUESTIONS.md #2). I could not look the SHAs up myself.
 3. Phase 3 needs the legal check of the CRA Article 14 text (PLAN.md question 7, you decided to do it with an outside reviewer) **before** I write any report text.
-4. Strix scans (Phase 1 and Phase 2): **pending**, no API budget.
+4. Strix scans (Phase 1 and Phase 2): **pending** until Fares has a free Google Gemini API key (decided: quick mode; QUESTIONS.md #8).
 5. The penetration-tester agent's Phase 2 review was **not completed** (a safety stop); see "End of Phase 2" below.
+
+
+**Update, 2026-10-21 (after the autopilot stopped) — recorded from Fares**
+- **Decisions:** QUESTIONS.md #2 (pin GitHub Actions to exact commit SHAs before the first push), #5 (run `cra run` every 4 hours with Windows Task Scheduler, to be set up in Phase 4) and #8 (free Google Gemini API key for Strix scans in quick mode; Phase 1 and 2 scans run once the key exists, until then pending) are marked DECIDED. New section "Later improvements (after Phase 3)" in QUESTIONS.md.
+- **Real current test total, run by Fares himself on 2026-10-21: 407 passed, 3 skipped** — the same as my own count above. His proof screenshots are in `screenshots/`: `01a-design-meeting-plan.png`, `01b-design-meeting-risks.png`, `02-all-tests-pass.png`, `03-first-live-run-log4shell.png`.
+- **What I checked in the screenshots:** I opened 02 and 03. The pytest result ("407 passed, 3 skipped in 7.85s") is in **03**; **02** shows a real `cra run` output (two report cases for log4j-core 2.14.1, the firmware component flagged UNKNOWN, "RESULT INCOMPLETE", "Nothing was sent"). So the file names of 02 and 03 look swapped. I did not rename them. I did not open 01a and 01b, so I only know them by their names.
 
 ---
 
