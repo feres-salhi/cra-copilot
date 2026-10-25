@@ -175,13 +175,14 @@ def test_kev_drop_of_more_than_5_percent_is_rejected_and_old_copy_kept(tmp_path)
     assert len(data["vulnerabilities"]) == REAL_KEV["count"]  # old copy kept
 
 
-def test_kev_drop_of_less_than_5_percent_is_accepted(tmp_path):
+def test_kev_drop_of_less_than_5_percent_is_no_longer_accepted(tmp_path):
+    # Before vuln-0007 a small drop was accepted. Now ANY dropped id makes KEV stale (a human checks).
     nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
     smaller = copy.deepcopy(REAL_KEV)
     smaller["vulnerabilities"] = smaller["vulnerabilities"][: int(REAL_KEV["count"] * 0.97)]
     smaller["count"] = len(smaller["vulnerabilities"])
     _, status = nw.fetch_kev(tmp_path, FakeNet(kev=json.dumps(smaller).encode()), no_sleep, now)
-    assert status["status"] == "ok"
+    assert status["status"] == "stale"
 
 
 @pytest.mark.parametrize("field,value", [("cveID", "../../etc"), ("cveID", 5), ("dateAdded", "yesterday")])
@@ -672,3 +673,60 @@ def test_vulnerability_ids_with_two_dots_are_rejected_not_a_crash(tmp_path):
     net.batch[LOG4J_2141] = {"vulns": [{"id": "a..b", "modified": "m"}]}
     purl_vulns, _, status = nw.fetch_osv([LOG4J_2141], tmp_path, net, no_sleep, now)
     assert purl_vulns[LOG4J_2141] is None and status["status"] == "failed"
+
+
+# ---- vuln-0007 (Strix): a KEV list that silently drops known ids must not count as complete ----
+
+
+def _kev_without(*cve_ids):
+    smaller = copy.deepcopy(REAL_KEV)
+    smaller["vulnerabilities"] = [e for e in smaller["vulnerabilities"] if e["cveID"] not in cve_ids]
+    smaller["count"] = len(smaller["vulnerabilities"])
+    return smaller
+
+
+def test_kev_list_that_drops_known_ids_is_stale_and_names_them(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    tampered = _kev_without("CVE-2021-44228", "CVE-2021-45046")  # only 2 of ~1750: far below 5%
+    data, status = nw.fetch_kev(tmp_path, FakeNet(kev=json.dumps(tampered).encode()), no_sleep, now)
+    assert status["status"] == "stale"
+    assert status["disappeared_ids"] == ["CVE-2021-44228", "CVE-2021-45046"]
+    assert "CVE-2021-44228" in status["detail"] and "human" in status["detail"]
+    assert "CVE-2021-44228" in nw.kev_cve_ids(data)  # saved copy still used
+
+
+def test_the_saved_copy_is_not_overwritten_by_a_list_with_missing_ids(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    path = tmp_path / "kev" / "kev-saved.json"
+    before = path.read_bytes()
+    nw.fetch_kev(tmp_path, FakeNet(kev=json.dumps(_kev_without("CVE-2021-44228")).encode()), no_sleep, now)
+    assert path.read_bytes() == before
+
+
+def test_padding_a_list_with_invented_ids_does_not_hide_the_missing_ones(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    padded = _kev_without("CVE-2021-44228")
+    for number in (1, 2):
+        padded["vulnerabilities"].append({"cveID": f"CVE-2099-000{number}0", "dateAdded": "2024-01-01"})
+    padded["count"] = len(padded["vulnerabilities"])
+    _, status = nw.fetch_kev(tmp_path, FakeNet(kev=json.dumps(padded).encode()), no_sleep, now)
+    assert status["status"] == "stale"
+    assert status["disappeared_ids"] == ["CVE-2021-44228"]
+
+
+def test_a_list_that_only_adds_ids_is_still_accepted(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    bigger = copy.deepcopy(REAL_KEV)
+    bigger["vulnerabilities"].append({"cveID": "CVE-2099-00010", "dateAdded": "2024-01-01"})
+    bigger["count"] = len(bigger["vulnerabilities"])
+    _, status = nw.fetch_kev(tmp_path, FakeNet(kev=json.dumps(bigger).encode()), no_sleep, now)
+    assert status["status"] == "ok"
+
+
+def test_a_run_with_dropped_kev_ids_is_incomplete(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    net = FakeNet(kev=json.dumps(_kev_without("CVE-2021-44228")).encode())
+    feeds = nw.collect([component(LOG4J_2141)], tmp_path, net, no_sleep, now)
+    assert feeds.kev_status["status"] == "stale"
+    assert not feeds.complete
+    assert "CVE-2021-44228" in feeds.kev_ids  # the saved copy still protects us
