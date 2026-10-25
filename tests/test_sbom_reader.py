@@ -481,6 +481,32 @@ def test_maven_group_field_must_agree_with_the_purl_namespace(tmp_path):
     assert _one_component(tmp_path, dict(good, group="bad group!")).status == "UNKNOWN"
 
 
-def test_double_slash_in_a_namespace_is_cleaned_up_not_kept(tmp_path):
+def test_double_slash_in_a_namespace_is_unknown(tmp_path):
     c = _one_component(tmp_path, {"name": "lib", "version": "1.0", "purl": "pkg:maven/a//b/lib@1.0"})
-    assert (c.status, c.purl) == ("OK", "pkg:maven/a/b/lib@1.0")
+    assert c.status == "UNKNOWN"
+
+
+# ---- vuln-0004 (Strix): a spelling OSV does not understand must never look "clean" ----
+
+
+@pytest.mark.parametrize("purl", [
+    "pkg:maven/org/apache/logging/log4j/log4j-core@2.14.1",  # slashes instead of dots
+    "pkg:maven/ORG.apache.logging.log4j/log4j-core@2.14.1",  # capital letters in the group
+    "pkg:maven/org.apache.logging.log4j/Log4j-Core@2.14.1",  # capital letters in the artifact
+])
+def test_non_canonical_maven_spelling_is_unknown_not_ok(tmp_path, purl):
+    c = _one_component(tmp_path, {"name": purl.split("/")[-1].split("@")[0], "version": "2.14.1", "purl": purl})
+    assert c.status == "UNKNOWN"
+    assert c.reason.startswith("maven purl")
+
+
+@pytest.mark.parametrize("purl, name", [
+    ("pkg:maven/a/b@c@1.0", "b@c"),
+    ("pkg:maven/a.b/x:y@1.0", "x:y"),
+    ("pkg:maven/a.b/x~y@1.0", "x~y"),
+    ("pkg:maven/org.apache./lib@1.0", "lib"),
+    ("pkg:maven/a._b/lib@1.0", "lib"),
+])
+def test_maven_names_that_cannot_exist_are_unknown(tmp_path, purl, name):
+    c = _one_component(tmp_path, {"name": name, "version": "1.0", "purl": purl})
+    assert c.status == "UNKNOWN"
