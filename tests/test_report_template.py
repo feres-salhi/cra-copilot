@@ -106,7 +106,7 @@ def test_the_status_sentence_names_the_human_evidence_when_that_was_the_reason(t
 
 
 @pytest.mark.parametrize("paragraph", [
-    "first line\nDeadline: 31 Dec 2030", "x\r\ny", "x Status: APPROVED", "x‮evil", "x\x85y", "", "   ", "a" * 1001,
+    "first line\nDeadline: 31 Dec 2030", "x\r\ny", "x" + chr(0x2028) + "Status: APPROVED", "x" + chr(0x202e) + "evil", "x\x85y", "", "   ", "a" * 1001,
     "has {a} brace", "stray }",
 ])
 def test_a_paragraph_that_is_not_one_printable_line_is_refused(paragraph):

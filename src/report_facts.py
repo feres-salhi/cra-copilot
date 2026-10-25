@@ -98,7 +98,10 @@ def format_time(text, lang):
     """A stored UTC time shown in Berlin time AND in UTC, so the clock change can never hide an hour."""
     _check_language(lang)
     utc = _parse_aware(text)
-    berlin = utc.astimezone(BERLIN)
+    try:
+        berlin = utc.astimezone(BERLIN)
+    except (OverflowError, ValueError) as error:  # the last day of year 9999 does not fit once Berlin is one hour ahead
+        raise FactsError("the time is outside the supported calendar") from error
     zone = berlin.tzname()
     clock = f"{berlin.hour:02d}:{berlin.minute:02d}"
     utc_part = f"{_day(utc, lang)} {utc.hour:02d}:{utc.minute:02d} UTC"

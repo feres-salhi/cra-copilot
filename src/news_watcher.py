@@ -52,6 +52,8 @@ MAX_IDS_PER_PURL = 500  # OSV listing more vulnerabilities than this for one com
 MAX_DETAIL_REQUESTS = 3000  # at most this many vulnerability records are downloaded in one run
 MAX_VERSIONS_PER_ENTRY = 20_000
 
+_HEADER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,63}")
+_FORBIDDEN_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "content-type", "user-agent"}
 CVE_PATTERN = re.compile(r"CVE-[0-9]{4}-[0-9]{4,12}")
 # Vulnerability IDs go into file names, so they must match a strict pattern first.
 # No ".." anywhere and no "." at the end (the cache path check refuses a trailing dot, so the two must agree).
@@ -91,24 +93,36 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         raise FetchError(f"refusing to follow a redirect (HTTP {code})", code)
 
 
-def http_fetch(url, body=None, max_bytes=MAX_OSV_VULN_BYTES):
+def http_fetch(url, body=None, max_bytes=MAX_OSV_VULN_BYTES, headers=None, allowed_hosts=None):
     """Download `url` (POST when `body` is given). Returns the bytes of a 200 answer.
 
     Safety rules: https on port 443 only, only our two known hosts, certificate checks on
     (the Python default), a timeout per read and for the whole download, a size cap,
     no redirects, and an answer that is shorter than its Content-Length counts as failed.
+
+    `allowed_hosts` replaces the two known hosts for one caller (the report writer uses it for the AI host only,
+    so the news watcher can never reach that host). `headers` adds request headers, for example an API key; a
+    header with a line break or an odd name is refused, and no message ever repeats a header value.
     """
     parsed = urllib.parse.urlparse(url)
     try:
         port = parsed.port
     except ValueError:
         port = -1
-    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS or port not in (None, 443):
+    hosts = ALLOWED_HOSTS if allowed_hosts is None else allowed_hosts
+    if parsed.scheme != "https" or parsed.hostname not in hosts or port not in (None, 443):
         raise FetchError("address is not on the allowed list")
+    if headers is not None:
+        if not isinstance(headers, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) and _HEADER_NAME.fullmatch(k) and v.isprintable() and v.isascii()
+                and k.lower() not in _FORBIDDEN_HEADERS for k, v in headers.items()):
+            raise FetchError("a request header is not valid")
     request = urllib.request.Request(url, data=body, method="POST" if body is not None else "GET")
     request.add_header("User-Agent", "cra-copilot (student project)")
     if body is not None:
         request.add_header("Content-Type", "application/json")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
     opener = urllib.request.build_opener(_NoRedirects)
     deadline = time.monotonic() + TOTAL_SECONDS
     try:

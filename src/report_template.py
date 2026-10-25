@@ -30,6 +30,8 @@ LABELS = {
         "evidence": "Source",
         "status": "Assessment",
         "summary": "Summary",
+        "source_ai": "Summary text: written by an AI and checked by code. A human must read it.",
+        "source_code": "Summary text: fixed wording written by code (the AI was not used or its text was rejected).",
         "footer": "This is a draft. A human must check and approve it. Nothing has been sent.",
     },
     "de": {
@@ -47,6 +49,8 @@ LABELS = {
         "evidence": "Quelle",
         "status": "Einordnung",
         "summary": "Zusammenfassung",
+        "source_ai": "Text der Zusammenfassung: von einer KI geschrieben und per Code geprüft. Ein Mensch muss ihn lesen.",
+        "source_code": "Text der Zusammenfassung: feste Formulierung, vom Code geschrieben (die KI wurde nicht genutzt oder ihr Text wurde abgelehnt).",
         "footer": "Dies ist ein Entwurf. Ein Mensch muss ihn prüfen und freigeben. Es wurde nichts gesendet.",
     },
 }
@@ -91,37 +95,44 @@ def status_sentence(facts, lang):
     return text.replace("@component", facts["component"]).replace("@version", facts["version"]).replace("@cve", facts["cve_id"])
 
 
-def render_report(facts, lang, paragraph):
-    """The full early warning draft in one language. `paragraph` has its placeholders filled already."""
+# The labelled lines, in order. The fact checker reads this same list, so template and checker cannot drift apart.
+FIELD_LINES = ("notification_type", "title", "manufacturer", "product_name", "component", "cve_id", "awareness",
+               "deadline", "member_states", "evidence")
+
+
+def labelled_lines(facts, lang):
+    """[(field, "Label: value"), ...] for every required line of the report, in the order they are written."""
     if lang not in LANGUAGES:
         raise FactsError("unknown language")
+    label = LABELS[lang]
+    value = render_facts(facts, lang)
+    result = []
+    for field in FIELD_LINES:
+        text = f"{value['component']} {value['version']}" if field == "component" else value[field]
+        result.append((field, f"{label[field]}: {text}"))
+    result.append(("status", f"{label['status']}: {status_sentence(facts, lang)}"))
+    return result
+
+
+SUMMARY_SOURCES = ("ai", "code")
+
+
+def render_report(facts, lang, paragraph, summary_source="code"):
+    """The full early warning draft in one language. `paragraph` has its placeholders filled already.
+
+    `summary_source` says who wrote the paragraph: "ai" (checked by code) or "code" (fixed wording).
+    """
+    if lang not in LANGUAGES:
+        raise FactsError("unknown language")
+    if summary_source not in SUMMARY_SOURCES:
+        raise FactsError("unknown summary source")
     # One single printable line: a paragraph can never start a new labelled line (a forged deadline or "approved" line).
     if (not isinstance(paragraph, str) or not paragraph.strip() or len(paragraph) > MAX_PARAGRAPH_LENGTH
             or not paragraph.isprintable() or "{" in paragraph or "}" in paragraph):
         raise FactsError("the summary paragraph must be one short printable line without braces")
     label = LABELS[lang]
-    value = render_facts(facts, lang)
-    component_line = f"{value['component']} {value['version']}"
-    lines = [
-        label["heading"],
-        label["law"],
-        "",
-        f"{label['notification_type']}: {value['notification_type']}",
-        f"{label['title']}: {value['title']}",
-        f"{label['manufacturer']}: {value['manufacturer']}",
-        f"{label['product_name']}: {value['product_name']}",
-        f"{label['component']}: {component_line}",
-        f"{label['cve_id']}: {value['cve_id']}",
-        f"{label['awareness']}: {value['awareness']}",
-        f"{label['deadline']}: {value['deadline']}",
-        f"{label['member_states']}: {value['member_states']}",
-        f"{label['evidence']}: {value['evidence']}",
-        "",
-        f"{label['status']}: {status_sentence(facts, lang)}",
-        "",
-        f"{label['summary']}:",
-        paragraph,
-        "",
-        label["footer"],
-    ]
+    line = dict(labelled_lines(facts, lang))
+    lines = [label["heading"], label["law"], ""]
+    lines += [line[field] for field in FIELD_LINES]
+    lines += ["", line["status"], "", f"{label['summary']}:", paragraph, label["source_" + summary_source], "", label["footer"]]
     return "\n".join(lines) + "\n"
