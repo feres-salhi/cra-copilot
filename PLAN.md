@@ -82,7 +82,7 @@ Every check gives one of three answers: **AFFECTED**, **NOT_AFFECTED** or **UNKN
 
 | Result | Action |
 |---|---|
-| AFFECTED + exploited | A report case is created. |
+| AFFECTED + exploited | A possible report case is created (a human decides if it is reportable). |
 | UNKNOWN + exploited | An **urgent human-review task**, not a report. |
 | AFFECTED, not exploited | Recorded and shown in `cra status`, no report. |
 

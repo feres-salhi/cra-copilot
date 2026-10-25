@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src import news_watcher as nw
+from src import matcher, news_watcher as nw
 from src.cli import main
 from tests.test_news_watcher import FakeNet, no_sleep
 
@@ -44,7 +44,7 @@ def test_demo_run_finds_the_log4shell_report_case(tmp_path, capsys):
     code = run_cli(tmp_path)
     out = capsys.readouterr().out
     assert code == 3
-    assert "REPORT CASE" in out
+    assert matcher.REPORT_CASE_LABEL in out
     assert "log4j-core 2.14.1: GHSA-jfh8-c2jp-5v3q (CVE-2021-44228) -> AFFECTED" in out
     assert "ACTIVELY EXPLOITED per kev (CVE-2021-44228)" in out
     assert "CVE-2021-45046" in out  # also in KEV
@@ -89,7 +89,7 @@ def test_requests_is_recorded_but_not_a_report_case(tmp_path, capsys):
     run_cli(tmp_path)
     out = capsys.readouterr().out
     assert "[Recorded (affected, not known to be exploited)] requests 2.30.0" in out
-    assert not [line for line in out.splitlines() if line.startswith("[REPORT CASE") and "requests" in line]
+    assert not [line for line in out.splitlines() if line.startswith("[POSSIBLE REPORT CASE") and "requests" in line]
 
 
 def test_failed_kev_means_incomplete_and_never_a_quiet_recorded(tmp_path, capsys):

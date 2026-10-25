@@ -19,6 +19,8 @@ from packaging.version import InvalidVersion, Version
 
 from src.safe_paths import safe_join
 
+REPORT_CASE_LABEL = "POSSIBLE REPORT CASE (a human decides if it is reportable under the CRA)"  # what people read; the action name stays REPORT_CASE
+
 AFFECTED = "AFFECTED"
 NOT_AFFECTED = "NOT_AFFECTED"
 UNKNOWN = "UNKNOWN"

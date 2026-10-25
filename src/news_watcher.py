@@ -887,7 +887,7 @@ def status_summary(run_dir, now=utc_now):
     if isinstance(report_cases, int) and report_cases > 0:
         ok = False
         lines.append(
-            f"WARNING: the latest run found {report_cases} REPORT CASE finding(s) "
+            f"WARNING: the latest run found {report_cases} POSSIBLE REPORT CASE finding(s) "
             "(affected AND actively exploited). Check the 24-hour deadline."
         )
     needs_human = last.get("needs_human")

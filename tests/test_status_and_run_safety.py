@@ -37,7 +37,7 @@ def test_unwritable_runs_folder_still_shows_the_report_case_and_exit_3(tmp_path,
     code = run_cli(tmp_path)
     out = capsys.readouterr().out
     assert code == 3
-    assert "REPORT CASE" in out
+    assert "POSSIBLE REPORT CASE" in out
     assert "RUN NOT SAVED" in out and "RESULT INCOMPLETE" in out
     assert "Traceback" not in out
 
@@ -135,7 +135,7 @@ def test_status_warns_about_report_cases_in_the_latest_run(tmp_path):
     put_run(tmp_path, report_cases=2)
     lines, ok = status(tmp_path)
     assert not ok
-    assert any("2 REPORT CASE" in line for line in lines)
+    assert any("2 POSSIBLE REPORT CASE" in line for line in lines)
 
 
 def test_status_warns_about_findings_that_need_a_human(tmp_path):
