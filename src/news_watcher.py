@@ -260,14 +260,19 @@ def load_kev_cache(cache_dir, now=utc_now):
     return saved["data"], meta
 
 
+def _saved_max_count(saved, saved_meta):
+    """The highest KEV entry count seen so far (a planted or damaged number is ignored)."""
+    value = saved_meta.get("max_count")
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= MAX_COUNT_VALUE:
+        value = 0
+    return max(len(saved["vulnerabilities"]) if saved else 0, value)
+
+
 def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
     """Download the KEV list. Returns (data_or_None, status_dict)."""
     saved, saved_meta = load_kev_cache(cache_dir, now)
     saved_meta = saved_meta or {}
-    saved_count_value = saved_meta.get("max_count")
-    if not isinstance(saved_count_value, int) or isinstance(saved_count_value, bool) or not 0 <= saved_count_value <= MAX_COUNT_VALUE:
-        saved_count_value = 0  # a planted or damaged number is ignored
-    saved_max = max(len(saved["vulnerabilities"]) if saved else 0, saved_count_value)
+    saved_max = _saved_max_count(saved, saved_meta)
     try:
         raw, data = _fetch_json(fetch, sleep, KEV_URL, None, MAX_KEV_BYTES)
         problem = validate_kev(data, saved_max or None, saved["dateReleased"] if saved else None, now())
@@ -301,6 +306,92 @@ def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
     # One single file, so data and fingerprint can never get out of step.
     _write_json_atomic(Path(cache_dir) / "kev" / "kev-saved.json", {**meta, "data": data})
     return data, {"status": "ok", "detail": "downloaded and checked", **meta}
+
+
+MAX_NAME_LENGTH = 80  # longest name a human may type when accepting removed KEV ids
+
+
+@dataclass
+class KevRemovalCheck:
+    """A freshly downloaded and validated KEV list, compared with the saved copy."""
+
+    removed: list  # sorted CVE ids that the saved copy had and the new list lacks
+    data: dict  # the new list, already reduced by slim_kev
+    sha256: str  # fingerprint of the exact bytes downloaded
+    baseline: tuple  # (sha256, downloaded_at) of the saved copy that was compared
+    saved_count: int  # entries in the saved copy
+    saved_released: str  # dateReleased of the saved copy
+
+
+class KevCopyChanged(Exception):
+    """The saved KEV copy changed while the human was deciding, so the decision is out of date."""
+
+
+def check_kev_removals(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
+    """Download the KEV list once and compare it with the saved copy. Changes nothing on disk.
+
+    Raises FetchError when there is nothing safe to compare or the new list fails any normal KEV check
+    (structure, future date, count, older than the saved copy). Those checks are NOT skipped here.
+    """
+    saved, saved_meta = load_kev_cache(cache_dir, now)
+    if saved is None:
+        raise FetchError("there is no usable saved KEV copy to compare with; run `cra run` first")
+    raw, data = _fetch_json(fetch, sleep, KEV_URL, None, MAX_KEV_BYTES)
+    problem = validate_kev(data, _saved_max_count(saved, saved_meta) or None, saved["dateReleased"], now())
+    if problem:
+        raise FetchError(problem)
+    data = slim_kev(data)
+    removed = sorted(kev_cve_ids(saved) - kev_cve_ids(data))
+    return KevRemovalCheck(removed, data, hashlib.sha256(raw).hexdigest(),
+                           (saved_meta.get("sha256"), saved_meta.get("downloaded_at")),
+                           len(saved["vulnerabilities"]), saved["dateReleased"])
+
+
+def clean_human_name(text):
+    """The name a human typed, or None if it is empty, too long or has control characters."""
+    if not isinstance(text, str):
+        return None
+    name = text.strip()
+    if not name or len(name) > MAX_NAME_LENGTH or not name.isprintable():
+        return None
+    return name
+
+
+def accept_kev_removals(cache_dir, check, name, now=utc_now):
+    """Replace the saved KEV copy with the checked list and log who accepted which ids.
+
+    The log line is written FIRST: if the record of the decision cannot be kept, the saved copy is not touched.
+    """
+    name = clean_human_name(name)
+    if name is None or not check.removed:
+        raise ValueError("a removal needs removed ids and a valid name")
+    kev_dir = Path(cache_dir) / "kev"
+    kev_dir.mkdir(parents=True, exist_ok=True)
+    log_path = kev_dir / "accepted-removals.log"
+    saved, saved_meta = load_kev_cache(cache_dir, now)
+    if saved is None or (saved_meta.get("sha256"), saved_meta.get("downloaded_at")) != check.baseline:
+        # e.g. a `cra run` saved a newer list while the human was typing: replacing it would roll the list back
+        raise KevCopyChanged("the saved KEV copy changed in the meantime")
+    # A human accepted this smaller list, so it becomes the new "highest count" (else later lists would fail the 5% rule).
+    # Old and new value are logged, so repeated acceptances that shrink the baseline stay visible.
+    new_max = len(check.data["vulnerabilities"])
+    entry = {"time": now().isoformat(), "name": name, "accepted_ids": check.removed, "sha256": check.sha256,
+             "max_count_before": _saved_max_count(saved, saved_meta or {}), "max_count_after": new_max}
+    with open(log_path, "a", encoding="utf-8") as log:
+        log.write(json.dumps(entry, sort_keys=True) + "\n")
+        log.flush()
+        os.fsync(log.fileno())
+    try:
+        _write_json_atomic(kev_dir / "kev-saved.json", {
+            "downloaded_at": now().isoformat(), "sha256": check.sha256, "max_count": new_max, "data": check.data})
+    except BaseException:
+        try:  # the log must not claim a decision that did not take effect
+            with open(log_path, "a", encoding="utf-8") as log:
+                log.write(json.dumps({"time": now().isoformat(), "outcome": "FAILED", "sha256": check.sha256},
+                                     sort_keys=True) + "\n")
+        except OSError:
+            pass
+        raise
 
 
 def slim_kev(data):
