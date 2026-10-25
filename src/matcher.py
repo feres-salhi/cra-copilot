@@ -393,12 +393,13 @@ def evaluate(components, feeds, evidence_dir=None):
         checked += 1
         vuln_ids = feeds.purl_vulns.get(component.purl)
         if not isinstance(vuln_ids, list):
-            findings.append(_finding(component, None, UNKNOWN, "osv_gave_no_answer", exploited_known=kev_ok))
+            # No CVE list was obtained, so nothing was compared with KEV: "exploited?" is NOT known.
+            findings.append(_finding(component, None, UNKNOWN, "osv_gave_no_answer", exploited_known=False))
             continue
         for vuln_id in vuln_ids:
             record = feeds.vulns.get(vuln_id)
             if not isinstance(record, dict):
-                findings.append(_finding(component, vuln_id, UNKNOWN, "osv_details_missing", exploited_known=kev_ok))
+                findings.append(_finding(component, vuln_id, UNKNOWN, "osv_details_missing", exploited_known=False))
                 continue
             if record.get("withdrawn"):
                 ignored.append(vuln_id)
@@ -410,7 +411,7 @@ def evaluate(components, feeds, evidence_dir=None):
                 evidence = read_evidence(evidence_dir, cve) if via == "evidence_file" else None
                 bad_evidence = [] if exploited else invalid_evidence_cves(record, evidence_dir)
             except (TypeError, AttributeError, ValueError, KeyError, OverflowError, RecursionError):
-                findings.append(_finding(component, vuln_id, UNKNOWN, "record_malformed", exploited_known=kev_ok))
+                findings.append(_finding(component, vuln_id, UNKNOWN, "record_malformed", exploited_known=False))
                 continue
             findings.append(_finding(component, vuln_id, status, rule, exploited, via, cve, matched_on,
                                      cves, exploited_known=kev_ok and not bad_evidence,

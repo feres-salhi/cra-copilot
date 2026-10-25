@@ -76,7 +76,7 @@ def _describe(finding):
     elif finding.get("evidence_problem"):
         text += f" - a human evidence file for {', '.join(finding['evidence_problem'])} exists but is UNUSABLE: fix it"
     elif not finding["exploited_known"]:
-        text += " - could NOT check if it is exploited (KEV list not fresh)"
+        text += " - could NOT check if it is exploited (no fresh KEV list or no vulnerability list to compare)"
     return text
 
 
