@@ -1,0 +1,12 @@
+id,title,severity,timestamp,file
+vuln-0004,Slash-separated or upper-case Maven purl is accepted as OK and silently clears an exploited component,MEDIUM,2026-10-25 15:42:15 UTC,vulnerabilities/vuln-0004.md
+vuln-0007,"Substituted CISA KEV list is accepted as complete, silently dropping exploited CVEs",MEDIUM,2026-10-25 15:44:02 UTC,vulnerabilities/vuln-0007.md
+vuln-0001,Planted run file in the runs folder makes cra status report a healthy latest run,LOW,2026-10-25 15:35:52 UTC,vulnerabilities/vuln-0001.md
+vuln-0002,cra status loads every planted run file into memory without a total size budget,LOW,2026-10-25 15:36:07 UTC,vulnerabilities/vuln-0002.md
+vuln-0005,"Same-version range boundaries misordered, hiding reintroduced affected versions",LOW,2026-10-25 15:43:28 UTC,vulnerabilities/vuln-0005.md
+vuln-0006,Unchecked components recorded as known not exploited when OSV gives no answer,LOW,2026-10-25 15:43:46 UTC,vulnerabilities/vuln-0006.md
+vuln-0008,Future-dated KEV response freezes the saved KEV copy until the operator intervenes,LOW,2026-10-25 15:44:25 UTC,vulnerabilities/vuln-0008.md
+vuln-0009,"Total download deadline is not enforced during reads, so a slow response can stall a run indefinitely",LOW,2026-10-25 15:44:48 UTC,vulnerabilities/vuln-0009.md
+vuln-0011,OSV vulnerability id with a trailing dot aborts the whole run,LOW,2026-10-25 15:45:12 UTC,vulnerabilities/vuln-0011.md
+vuln-0012,Concurrent run records in the same second overwrite each other,LOW,2026-10-25 15:45:46 UTC,vulnerabilities/vuln-0012.md
+vuln-0013,"Run record above 20 MB is silently skipped by cra status, which then reports the previous clean run as current",LOW,2026-10-25 15:46:02 UTC,vulnerabilities/vuln-0013.md
