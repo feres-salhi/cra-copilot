@@ -31,3 +31,5 @@ Ideas Fares noted on 2026-10-21. Nothing here is built yet; do not start before 
 | # | Question | Temporary (safe) choice used |
 |---|---|---|
 | S1 | Maven versions in capital letters (`1.0-RC1`): does OSV match them case-sensitively? Should they be UNKNOWN like capital group/artifact names? | Still accepted as OK (not verified offline). |
+| S2 | KEV removal policy (vuln-0007): CISA may remove entries on purpose. Today any dropped id makes KEV stale until a human deletes `cache/kev/kev-saved.json`. Should there be a command to accept a reviewed removal? | Stale + INCOMPLETE + ids printed; saved copy kept. |
+| S3 | KEV authenticity (vuln-0007): a replay of the old list with a newer date, the first run (no baseline), a damaged saved file (baseline lost) and changed `dateAdded` values are not detected. Needs a signature, a pinned hash or a second source. Which one? | Not decided; documented as a known limit. |

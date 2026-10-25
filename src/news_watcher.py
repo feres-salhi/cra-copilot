@@ -64,6 +64,19 @@ class FetchError(Exception):
         self.status = status
 
 
+class _KevIdsDisappeared(FetchError):
+    """The new KEV list no longer contains CVE ids that the saved copy had."""
+
+    def __init__(self, ids):
+        shown = ", ".join(ids[:20]) + (f" and {len(ids) - 20} more" if len(ids) > 20 else "")
+        super().__init__(
+            f"the new KEV list dropped {len(ids)} CVE id(s) that were listed before: {shown}. "
+            "A human must check whether CISA removed them on purpose. "
+            "The saved copy is kept; delete cache/kev/kev-saved.json only after that check"
+        )
+        self.ids = ids
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -254,14 +267,23 @@ def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
         if problem:
             raise FetchError(problem)
         data = slim_kev(data)  # keep only IDs and dates: no free text is saved
+        disappeared = sorted(kev_cve_ids(saved) - kev_cve_ids(data)) if saved else []
+        if disappeared:
+            # CISA may remove an entry on purpose, but a list that quietly loses ids could also be tampered
+            # with. Neither is silently accepted: keep the saved copy, mark KEV stale, let a human decide.
+            raise _KevIdsDisappeared(disappeared)
     except FetchError as error:
         if saved is not None:
-            return saved, {
+            status = {
                 "status": "stale",
                 "detail": f"download failed ({error}); using the saved copy",
                 "downloaded_at": saved_meta.get("downloaded_at"),
                 "sha256": saved_meta.get("sha256"),
             }
+            if isinstance(error, _KevIdsDisappeared):
+                status["detail"] = f"{error}; using the saved copy"
+                status["disappeared_ids"] = error.ids
+            return saved, status
         return None, {"status": "failed", "detail": f"download failed ({error}); no saved copy"}
 
     meta = {
