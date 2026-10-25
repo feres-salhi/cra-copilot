@@ -765,3 +765,44 @@ def test_an_unreadable_newer_run_file_hides_no_older_clean_run(tmp_path, content
     lines, ok = nw.status_summary(tmp_path, now)
     assert ok is False
     assert "Latest run: all sources ok." not in "\n".join(lines)
+
+
+# ---- vuln-0001 (Strix), the simple safe part: a run record that cannot be verified is never "all sources ok" ----
+
+
+def _healthy_planted_run(finished):
+    return {"finished_at": finished.isoformat(), "complete": True, "report_cases": 0, "needs_human": False,
+            "sources": {"kev": {"status": "ok"}, "osv": {"status": "ok"}}, "components": {"checked": 1, "unchecked": 0}}
+
+
+def test_a_planted_unsealed_healthy_run_does_not_hide_the_real_report_case(tmp_path):
+    real = _run(NOW - timedelta(hours=3), {"kev": "ok", "osv": "ok"})
+    real.update({"report_cases": 2, "needs_human": True, "components": {"checked": 1, "unchecked": 0}})
+    nw.save_run(tmp_path, real, lambda: NOW - timedelta(hours=3))
+    planted = tmp_path / "2026-10-25T00-00-00Z-planted.json"
+    planted.write_text(json.dumps(_healthy_planted_run(NOW - timedelta(hours=1))), encoding="utf-8")
+    lines, ok = nw.status_summary(tmp_path, now)
+    text = "\n".join(lines)
+    assert ok is False
+    assert "Latest run: all sources ok." not in text
+    assert "RESULT INCOMPLETE" in text and "seal" in text
+
+
+def test_a_run_record_edited_after_saving_is_not_trusted(tmp_path):
+    real = _run(NOW - timedelta(hours=1), {"kev": "ok", "osv": "ok"})
+    real.update({"report_cases": 2, "needs_human": True, "components": {"checked": 1, "unchecked": 0}})
+    path = nw.save_run(tmp_path, real, lambda: NOW - timedelta(hours=1))
+    edited = json.loads(path.read_text(encoding="utf-8"))
+    edited["report_cases"] = 0
+    edited["needs_human"] = False
+    path.write_text(json.dumps(edited), encoding="utf-8")
+    lines, ok = nw.status_summary(tmp_path, now)
+    assert ok is False
+    assert "REPORT CASE" not in "\n".join(lines) or "RESULT INCOMPLETE" in "\n".join(lines)
+    assert "Latest run: all sources ok." not in "\n".join(lines)
+
+
+def test_a_normally_saved_run_is_sealed_and_verifies(tmp_path):
+    nw.save_run(tmp_path, _run(NOW - timedelta(hours=1), {"kev": "ok", "osv": "ok"}), lambda: NOW - timedelta(hours=1))
+    lines, ok = nw.status_summary(tmp_path, now)
+    assert "Latest run: all sources ok." in lines and ok is True

@@ -591,8 +591,19 @@ def collect(components, cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_n
 # ---------------------------------------------------------------- run files
 
 
+def run_seal(run):
+    """Fingerprint (SHA-256) of a run record without its own "seal" field.
+
+    This is NOT a signature: anyone who knows this code can compute it. It only catches edits and files
+    that were not written by `cra run` (Strix vuln-0001). Real protection needs a key (QUESTIONS.md S7).
+    """
+    body = {k: v for k, v in run.items() if k != "seal"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def save_run(run_dir, run, now=utc_now):
-    """Save one run as runs/<UTC time>.json. Returns the path."""
+    """Save one run as runs/<UTC time>.json (with its seal). Returns the path."""
+    run = {**run, "seal": run_seal(run)}
     run_dir = Path(run_dir)
     stamp = now().strftime("%Y-%m-%dT%H-%M-%SZ")
     path = run_dir / f"{stamp}.json"
@@ -655,6 +666,10 @@ def load_runs(run_dir):
         elif not (isinstance(data, dict) and isinstance(data.get("finished_at"), str)
                   and _parse_time(data["finished_at"]) is not None):
             data = _run_file_problem("a run record is damaged or unreadable (unreadable)", path)
+        elif data.get("seal") != run_seal(data):
+            # Not written by this tool, or edited since. Keep its own time so it still counts as the latest.
+            data = {**_run_file_problem("a run record has no valid seal: it was not saved by this tool or was changed "
+                                        "(not verified)", path), "finished_at": data["finished_at"]}
         runs.append((_parse_time(data["finished_at"]), path.stem, data))
     # Runs whose time cannot be read sort first and are never used as "the latest".
     epoch = datetime.min.replace(tzinfo=timezone.utc)
