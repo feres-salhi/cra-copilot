@@ -806,3 +806,26 @@ def test_a_normally_saved_run_is_sealed_and_verifies(tmp_path):
     nw.save_run(tmp_path, _run(NOW - timedelta(hours=1), {"kev": "ok", "osv": "ok"}), lambda: NOW - timedelta(hours=1))
     lines, ok = nw.status_summary(tmp_path, now)
     assert "Latest run: all sources ok." in lines and ok is True
+
+
+# ---- vuln-0002 (Strix): status must not load every run file, and a dropped file must never look clean ----
+
+
+def test_load_runs_keeps_only_the_newest_and_the_newest_complete_run(tmp_path):
+    for hours in (9, 8, 7):
+        nw.save_run(tmp_path, _run(NOW - timedelta(hours=hours), {"kev": "ok", "osv": "ok"}), lambda h=hours: NOW - timedelta(hours=h))
+    nw.save_run(tmp_path, _run(NOW - timedelta(hours=1), {"kev": "failed", "osv": "ok"}), lambda: NOW - timedelta(hours=1))
+    kept = nw.load_runs(tmp_path)
+    assert len(kept) == 2  # the newest (failed) run and the newest complete run, nothing else
+
+
+def test_a_folder_over_the_total_byte_budget_is_incomplete_never_clean(tmp_path, monkeypatch):
+    for hours in (5, 4, 3, 2):
+        nw.save_run(tmp_path, _run(NOW - timedelta(hours=hours), {"kev": "ok", "osv": "ok"}), lambda h=hours: NOW - timedelta(hours=h))
+    one_file = max(p.stat().st_size for p in tmp_path.glob("*.json"))
+    monkeypatch.setattr(nw, "MAX_RUN_TOTAL_BYTES", one_file * 2)
+    lines, ok = nw.status_summary(tmp_path, now)
+    text = "\n".join(lines)
+    assert ok is False
+    assert "RESULT INCOMPLETE" in text and "budget" in text
+    assert "Latest run: all sources ok." not in text

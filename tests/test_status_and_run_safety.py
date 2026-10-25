@@ -213,15 +213,18 @@ def test_a_far_future_run_file_does_not_say_all_sources_ok(tmp_path):
     assert any("future" in line for line in lines)
 
 
-def test_only_the_newest_run_files_are_read(tmp_path, monkeypatch):
-    monkeypatch.setattr(nw, "MAX_RUN_FILES", 3)
+def test_no_run_file_is_dropped_because_of_how_many_there_are(tmp_path):
+    # vuln-0002: there is no file-count cut-off any more. The run with the newest TIME wins even if its
+    # file name sorts first; the total byte budget (not a count) bounds the work.
     for i in range(6):
         nw.save_run(tmp_path, {"finished_at": (NOW + timedelta(seconds=i)).isoformat(), "marker": i}, lambda: NOW + timedelta(seconds=i))
-    assert [r["marker"] for r in nw.load_runs(tmp_path)] == [3, 4, 5]
-
-
-# ------------------------------------------------------------------ temp files
-
+    oldest_name = sorted(tmp_path.glob("*.json"))[0]
+    data = json.loads(oldest_name.read_text(encoding="utf-8"))
+    data["finished_at"] = (NOW + timedelta(seconds=99)).isoformat()
+    data["marker"] = 99
+    data.pop("seal")
+    oldest_name.write_text(json.dumps({**data, "seal": nw.run_seal(data)}), encoding="utf-8")
+    assert nw.load_runs(tmp_path)[-1]["marker"] == 99
 
 def test_atomic_write_leaves_no_temp_files_and_replaces_the_file(tmp_path):
     target = tmp_path / "x.json"
