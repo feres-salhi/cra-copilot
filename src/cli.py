@@ -6,6 +6,7 @@ Commands:
     check-sbom   read an SBOM and list its components
     run          download the public data, check the product, save the run in runs/
     status       show when the last successful run was, with loud warnings
+    kev accept-removals   a human accepts a KEV list that lost CVE ids (types "yes" and a name; nothing skips this)
 
 Exit codes of `run`:
     0 = complete result, nothing exploited and affected found
@@ -205,6 +206,61 @@ def _status(args):
     return 0 if ok else 1
 
 
+def ask_human(question):
+    """Ask a question on the keyboard. Piped input or a scheduled task is not a human: it cancels."""
+    if not sys.stdin or not sys.stdin.isatty():
+        raise EOFError("no keyboard attached")
+    return input(question)
+
+
+def _kev_accept_removals(args):
+    """Decision S2: a human may accept a KEV list that lost CVE ids. Never runs by itself, no flag skips the question."""
+    try:
+        check = news_watcher.check_kev_removals(args.cache, args.fetch, args.sleep, args.now)
+    except news_watcher.FetchError as error:
+        print(f"Nothing changed. KEV download failed or the list was refused: {error}")
+        if "dropped by more than 5%" in str(error):
+            print("This command cannot accept a drop of more than 5%. If CISA really removed that many, a human must "
+                  "check it and then delete cache/kev/kev-saved.json by hand.")
+        return 1
+    except OSError as error:
+        print(f"Nothing changed. The cache folder could not be used ({type(error).__name__}).")
+        return 1
+    if not check.removed:
+        print("No CVE id disappeared from the KEV list. Nothing to accept, nothing changed.")
+        return 0
+
+    print(f"The new KEV list no longer contains {len(check.removed)} CVE id(s) that the saved copy has:")
+    for cve in check.removed:
+        print(f"  {cve}")
+    print(f"Saved copy: {check.saved_count} entries, released {check.saved_released}. "
+          f"New list: {len(check.data['vulnerabilities'])} entries, released {check.data['dateReleased']}.")
+    print("Check on the CISA website that CISA removed them on purpose before you accept.")
+    try:
+        if args.ask('Type the word "yes" to accept these removals: ').strip() != "yes":
+            print("Cancelled. Nothing changed.")
+            return 1
+        name = news_watcher.clean_human_name(args.ask("Type your name (it is written to the log): "))
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled. Nothing changed.")
+        return 1
+    if name is None:
+        print("Cancelled (the name is empty, too long or has special characters). Nothing changed.")
+        return 1
+    try:
+        news_watcher.accept_kev_removals(args.cache, check, name, args.now)
+    except news_watcher.KevCopyChanged:
+        print("The saved KEV copy changed while you were deciding (for example a `cra run` saved a newer list). "
+              "Nothing was changed. Run this command again.")
+        return 1
+    except OSError as error:
+        print(f"The saved KEV copy was NOT changed: the decision could not be saved ({type(error).__name__}).")
+        return 1
+    print(f"Accepted. The saved KEV copy was replaced; {len(check.removed)} removed id(s) were logged in "
+          "cache/kev/accepted-removals.log.")
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="cra", description="CRA Copilot: helps with the CRA 24-hour early warning. Never sends anything."
@@ -227,11 +283,18 @@ def build_parser():
     status = commands.add_parser("status", help="show the state of the last runs")
     status.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
     status.set_defaults(handler=_status)
+
+    kev = commands.add_parser("kev", help="work with the saved CISA KEV list")
+    kev_commands = kev.add_subparsers(dest="kev_command", required=True)
+    accept = kev_commands.add_parser(
+        "accept-removals", help="a human accepts a KEV list that dropped CVE ids (asks first, no way around it)")
+    accept.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder for saved downloads")
+    accept.set_defaults(handler=_kev_accept_removals)
     return parser
 
 
-def main(argv=None, fetch=None, sleep=None, now=None):
-    """`fetch`, `sleep` and `now` can be replaced by tests; normal use leaves them empty."""
+def main(argv=None, fetch=None, sleep=None, now=None, ask=None):
+    """`fetch`, `sleep`, `now` and `ask` can be replaced by tests; normal use leaves them empty."""
     # A Windows console may not be able to show every character: never crash because of that.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -240,6 +303,7 @@ def main(argv=None, fetch=None, sleep=None, now=None):
     args.fetch = fetch or news_watcher.http_fetch
     args.sleep = sleep or news_watcher.time.sleep
     args.now = now or news_watcher.utc_now
+    args.ask = ask or ask_human
     return args.handler(args)
 
 
