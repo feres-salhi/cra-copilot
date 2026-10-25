@@ -6,6 +6,7 @@ Commands:
     check-sbom   read an SBOM and list its components
     run          download the public data, check the product, save the run in runs/
     status       show when the last successful run was, with loud warnings
+    preview-report   print the German + English draft of each possible report case of a saved run (saves and sends nothing)
     kev accept-removals   a human accepts a KEV list that lost CVE ids (types "yes" and a name; nothing skips this)
 
 Exit codes of `run`:
@@ -20,10 +21,11 @@ The tool NEVER sends anything. A human always decides (CLAUDE.md rule 6).
 
 import argparse
 import hashlib
+import json
 import sys
 from pathlib import Path
 
-from src import matcher, news_watcher
+from src import matcher, news_watcher, report_facts, report_writer
 from src.sbom_reader import ConfigError, SbomError, load_sbom, read_product_config
 
 # Default folders are fixed next to the program, not "wherever the command was started":
@@ -263,6 +265,134 @@ def _kev_accept_removals(args):
     return 0
 
 
+PREVIEW_BANNER = "PREVIEW - NOT A REPORT, NOTHING IS SENT"
+MAX_PREVIEW_CASES = 50  # a forged run file must not cause an endless number of AI calls
+
+
+def _load_sealed_run(path):
+    """The saved run record as a dict, or (None, reason). A record without a valid seal is not trusted."""
+    try:
+        if not Path(path).is_file():  # a missing file, a folder, or a device such as CON or a pipe: never opened
+            return None, "the run file cannot be read"
+        with open(path, "rb") as handle:
+            raw = handle.read(news_watcher.MAX_CACHE_FILE_BYTES + 1)
+    except OSError:
+        return None, "the run file cannot be read"
+    if len(raw) > news_watcher.MAX_CACHE_FILE_BYTES:
+        return None, "the run file is too large"
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return None, "the run file is not valid JSON"
+    if not isinstance(data, dict):
+        return None, "the run file is not a run record"
+    if data.get("seal") != news_watcher.run_seal(data):
+        return None, "the run file has no valid seal: it was not saved by this tool or was changed"
+    return data, None
+
+
+def _say(text, limit=1500):
+    """Print text line by line through the terminal-safe printer (defence in depth: control characters become '?')."""
+    for line in str(text).split("\n"):
+        print(news_watcher.printable(line, limit))
+
+
+def _preview_report(args):
+    """Phase 3: show the draft of every possible report case in a saved run. Saves nothing, sends nothing."""
+    print(PREVIEW_BANNER)
+    code = _preview_body(args)
+    print(PREVIEW_BANNER)
+    return code
+
+
+def _preview_body(args):
+    run, problem = _load_sealed_run(args.run)
+    if run is None:
+        print(f"REJECTED: {problem}.")
+        return 2
+
+    ai = None
+    if args.live_ai:
+        try:
+            ai = args.ai or report_writer.make_gemini_ai(args.env_file)
+        except report_writer.AiNotConfigured as error:
+            print(f"The AI is not configured: {error}")
+            return 2
+
+    result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    findings = result.get("findings") if isinstance(result.get("findings"), list) else []
+    cases = [f for f in findings if isinstance(f, dict) and f.get("action") == "REPORT_CASE"]
+    product = run.get("product")
+
+    print("Note: this preview trusts the saved run record. A human must confirm that the component really is part of the "
+          "product (the 'affected' result is not checked against the SBOM again here).")
+    if not news_watcher.run_is_complete(run):
+        print("Note: this run was INCOMPLETE (a source or a component could not be fully checked), so more cases may exist.")
+    saved_kev, kev_meta = news_watcher.load_kev_cache(args.cache, args.now)
+    kev_ids = news_watcher.kev_cve_ids(saved_kev) if saved_kev else None
+    if saved_kev is None:
+        print("Note: no usable saved KEV list was found, so no KEV-based case can be verified.")
+    else:
+        used = (run.get("sources") or {}).get("kev") if isinstance(run.get("sources"), dict) else None
+        used_sha = used.get("sha256") if isinstance(used, dict) else None
+        if used_sha and kev_meta and kev_meta.get("sha256") != used_sha:
+            print("Note: the saved KEV list is not the one this run used (it was updated since); cases are checked against the newer list.")
+
+    if not cases:
+        print("No POSSIBLE REPORT CASE in this run.")
+        return 1
+
+    all_ok = True
+    seen = set()
+    shown = folded = skipped = 0
+    for finding in cases:
+        name = f"{news_watcher.printable(finding.get('component'), 60)} / {news_watcher.printable(finding.get('exploited_cve'), 30)}"
+        try:
+            facts = report_facts.build_facts(product, finding, kev_ids=kev_ids, evidence_dir=args.evidence)
+        except report_facts.FactsError as error:
+            all_ok = False
+            print(f"\nA possible report case in this run cannot be shown ({name}): cannot build the facts ({news_watcher.printable(str(error))}).")
+            continue
+        key = json.dumps(facts, sort_keys=True)
+        if key in seen:  # several advisories can lead to the same component and CVE
+            folded += 1
+            continue
+        if shown >= MAX_PREVIEW_CASES:
+            skipped += 1
+            continue
+        seen.add(key)
+        shown += 1
+        if args.live_ai and shown == 1:
+            print("\nCalling Google Gemini with fixed prompts only (no product data is sent).")
+        try:
+            draft = report_writer.build_draft(facts, ai)
+        except Exception as error:  # never end with a traceback
+            all_ok = False
+            print(f"\nThe draft for {name} could not be written ({type(error).__name__}).")
+            continue
+        print(f"\n=== {matcher.REPORT_CASE_LABEL}: {facts['cve_id']} in {facts['component']} {facts['version']} ===")
+        if draft.source["mode"] == "ai":
+            print("Summary written by: AI (checked by code)")
+        else:
+            print(f"Summary written by: fixed fallback text ({news_watcher.printable(draft.source['reason'], 300)})")
+        if draft.reports:
+            print(f"\n--- ENGLISH --- ({PREVIEW_BANNER})")
+            _say(draft.reports["en"].rstrip("\n"))
+            print(f"\n--- DEUTSCH --- ({PREVIEW_BANNER})")
+            _say(draft.reports["de"].rstrip("\n"))
+        print(f"\nFact check: {draft.check.status}")
+        for item in draft.check.problems:
+            print(f"  - {news_watcher.printable(item, 300)}")
+        all_ok = all_ok and draft.check.status == "PASS"
+    if folded:
+        print(f"\n{folded} more advisory entr{'y' if folded == 1 else 'ies'} lead to a case that is shown above (not repeated).")
+    if skipped:
+        print(f"\n{skipped} further case(s) were not shown (limit: {MAX_PREVIEW_CASES}).")
+        all_ok = False
+    print(f"\n{shown} case(s) shown. Nothing was saved. Nothing was sent. A human decides what happens next.")
+    return 0 if all_ok and shown else 1
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="cra", description="CRA Copilot: helps with the CRA 24-hour early warning. Never sends anything."
@@ -286,6 +416,15 @@ def build_parser():
     status.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
     status.set_defaults(handler=_status)
 
+    preview = commands.add_parser(
+        "preview-report", help="print the German + English draft of each possible report case of a run (saves and sends nothing)")
+    preview.add_argument("--run", required=True, help="path to a saved run record (a file in runs/)")
+    preview.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder with the saved KEV list")
+    preview.add_argument("--evidence", default=str(PROJECT_ROOT / "evidence"), help="folder with human evidence files")
+    preview.add_argument("--env-file", default=str(PROJECT_ROOT / ".env"), help="file with GEMINI_API_KEY (only read with --live-ai)")
+    preview.add_argument("--live-ai", action="store_true", help="let Google Gemini write the summary paragraph (default: off)")
+    preview.set_defaults(handler=_preview_report)
+
     kev = commands.add_parser("kev", help="work with the saved CISA KEV list")
     kev_commands = kev.add_subparsers(dest="kev_command", required=True)
     accept = kev_commands.add_parser(
@@ -295,8 +434,8 @@ def build_parser():
     return parser
 
 
-def main(argv=None, fetch=None, sleep=None, now=None, ask=None):
-    """`fetch`, `sleep`, `now` and `ask` can be replaced by tests; normal use leaves them empty."""
+def main(argv=None, fetch=None, sleep=None, now=None, ask=None, ai=None):
+    """`fetch`, `sleep`, `now`, `ask` and `ai` can be replaced by tests; normal use leaves them empty."""
     # A Windows console may not be able to show every character: never crash because of that.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -306,6 +445,7 @@ def main(argv=None, fetch=None, sleep=None, now=None, ask=None):
     args.sleep = sleep or news_watcher.time.sleep
     args.now = now or news_watcher.utc_now
     args.ask = ask or ask_human
+    args.ai = ai
     return args.handler(args)
 
 
