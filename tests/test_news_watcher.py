@@ -925,3 +925,30 @@ def test_one_unusable_id_cannot_abort_the_run_at_the_cache_path_step(tmp_path, m
     purl_vulns, vulns, status = nw.fetch_osv([LOG4J_2141], tmp_path, FakeNet(), no_sleep, now)
     assert status["status"] == "failed"
     assert all(v is None for v in vulns.values())
+
+
+# ---- vuln-0012 (Strix): runs saved at the same moment must never overwrite each other ----
+
+
+def test_concurrent_saves_in_the_same_second_all_survive(tmp_path):
+    import threading
+
+    gate = threading.Barrier(16)
+    errors = []
+
+    def save(i):
+        try:
+            gate.wait()
+            nw.save_run(tmp_path, {**_run(NOW, {"kev": "ok", "osv": "ok"}), "marker": i}, now)
+        except Exception as error:  # a failed save must show up in the test
+            errors.append(error)
+
+    threads = [threading.Thread(target=save, args=(i,)) for i in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    files = sorted(tmp_path.glob("*.json"))
+    assert len(files) == 16
+    assert sorted(json.loads(f.read_text(encoding="utf-8"))["marker"] for f in files) == list(range(16))

@@ -619,11 +619,25 @@ def save_run(run_dir, run, now=utc_now):
     run_dir = Path(run_dir)
     stamp = now().strftime("%Y-%m-%dT%H-%M-%SZ")
     path = run_dir / f"{stamp}.json"
+    run_dir.mkdir(parents=True, exist_ok=True)
     counter = 1
-    while path.exists():
-        counter += 1
-        path = run_dir / f"{stamp}-{counter:04d}.json"  # zero-padded so the order stays right
-    _write_json_atomic(path, run)
+    while True:
+        try:  # claim the name in ONE step: two runs finishing together can never both get it
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+            break
+        except (FileExistsError, PermissionError):  # on Windows a name that is being replaced right now says "denied"
+            if counter >= MAX_NAME_TRIES:
+                raise
+            counter += 1
+            path = run_dir / f"{stamp}-{counter:04d}.json"  # zero-padded so the order stays right
+    try:
+        _write_json_atomic(path, run)  # replaces the empty claim in one piece
+    except BaseException:
+        try:
+            os.unlink(path)  # never leave an empty claim behind
+        except OSError:
+            pass
+        raise
     return path
 
 
@@ -640,6 +654,7 @@ def run_is_complete(run):
     return all(isinstance(s, dict) and s.get("status") == "ok" for s in sources.values())
 
 
+MAX_NAME_TRIES = 1000  # most numbered names tried for one run file before giving up
 MAX_RUN_TOTAL_BYTES = 200 * 1024 * 1024  # all run files together; more than this is not read (status says so)
 
 
