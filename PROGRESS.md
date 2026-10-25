@@ -1,5 +1,30 @@
 # Progress Log
 
+## Summary for Fares: Strix findings fixed (autopilot, 2026-10-25)
+
+**What was done**
+- **Part A** (legal check in PLAN.md): was already committed ("Add CRA legal check, Phase 5 and Strix decision"), so I skipped it.
+- **Part B:** the Strix report, the screenshots and a Strix entry in this file are committed ("Add Strix penetration test report").
+- **Part C:** all 11 Strix findings were worked on one at a time, each with a test, a review by the code reviewer and the security auditor, its own commit, and its own entry below. In the order given: vuln-0004, 0007, 0006, 0005, 0013, 0001 (simple safe part only), 0002, 0008, 0009, 0011, 0012. **None had to be reverted.**
+- The tool now fails closed in these places: odd Maven spellings are UNKNOWN; a KEV list that loses ids is stale + INCOMPLETE (ids printed, old copy kept); "no OSV answer" is urgent review; same-version range ties are handled and ambiguous ones are UNKNOWN; unreadable, oversized or unsealed run records make `status` say INCOMPLETE; `status` keeps only two runs in memory with a size budget; a future-dated KEV list is rejected; a slow-dripping download stops on time; a bad OSV id no longer aborts a run; runs saved at the same moment no longer overwrite each other.
+
+**Test totals (real numbers, final run):** **445 passed, 3 skipped, 0 failed** (before this work: 407 passed, 3 skipped). The 3 skipped are the same as before: 2 optional live tests and 1 symlink test this Windows account cannot run.
+
+**Bandit (final run, `.venv\Scripts\python -m bandit -r src`):** "No issues identified." 1,537 lines scanned, 0 issues of any severity, 0 skipped.
+
+**What is still open (details in QUESTIONS.md, rows S1-S15)**
+- vuln-0001 is only partly fixed: the run-record seal stops fake and edited files, but not someone who knows the code. A real fix needs signing with a key (S7).
+- vuln-0007 is only partly fixed: a replay of the old KEV list with a newer date, the very first run and a damaged saved file are not detected; a legitimate CISA removal keeps KEV stale until a human deletes `cache/kev/kev-saved.json` (S2, S3).
+- Strix's open items that need your decisions (I did not decide any of them): no-purl components urgency (S4), advisories without a CVE id (S5), batch answers matched by position (S11), OSV `limit` events (S12), PEP 440 local labels (S13), KEV via `upstream` (S14), checking the pinned dependencies against advisory databases (S15). Also S1, S6, S8, S9, S10.
+- Not done on purpose: no Strix re-run, no Phase 3, nothing pushed to GitHub, `.env` never touched. Some final tweaks after a review (vuln-0013, 0002, 0012) were not reviewed a second time; each entry says so.
+
+**What needs you next**
+1. Read QUESTIONS.md rows S1-S15 and decide the ones that matter (S2, S3 and S7 are the biggest).
+2. Run `cra run` once so the run folder has a sealed record (old records show as "not verified" now).
+3. Re-run Strix in November as planned, to check these fixes; after that Phase 3 can start.
+4. Before the first push: pin the GitHub Actions to commit SHAs (QUESTIONS.md #2) and run the secrets check again.
+
+---
 ## Summary for Fares (written when the autopilot stopped — Phase 3 was NOT started)
 
 **What is done**
@@ -414,3 +439,8 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **The fix (`src/news_watcher.py`):** the file name is now claimed in one single step (create-new-file-only). If it already exists (or Windows says "denied" because another save is replacing it right now), the next numbered name is tried (up to 1000). Then the content is written in one piece as before; if writing fails the empty claim is removed. A hard power-off between claim and write can leave an empty file; `status` shows that as an incomplete run (safe).
 - **Test:** 1 new test saves 16 runs at the same moment from 16 threads. It failed on the old code (3 of 3 tries) and passes now (6 of 6 tries). Full suite: **445 passed, 3 skipped, 0 failed.**
 - **Reviews:** security auditor: no problem (symlinks are not followed). Code reviewer: found that on Windows a name that is being replaced can answer "denied" instead of "exists"; I handled that as suggested (this last change was not reviewed again).
+
+### Final check after all fixes (2026-10-25)
+- **Full test suite** (`.venv\Scripts\python -m pytest`): **445 passed, 3 skipped, 0 failed.**
+- **Bandit** (`.venv\Scripts\python -m bandit -r src`): **No issues identified.** 1,537 lines scanned; issues by severity: Undefined 0, Low 0, Medium 0, High 0; by confidence: all 0; 0 lines skipped with `#nosec`.
+- **Not run:** Strix (not allowed in this order), a secrets scan (nothing pushed), the optional live tests.
