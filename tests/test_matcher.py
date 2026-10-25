@@ -608,3 +608,29 @@ def test_evaluate_tells_if_an_evidence_folder_was_used(tmp_path):
     feeds = kev_feeds({purl: []}, {}, "ok")
     assert matcher.evaluate([ok(purl)], feeds)["evidence_folder_given"] is False
     assert matcher.evaluate([ok(purl)], feeds, tmp_path)["evidence_folder_given"] is True
+
+
+# ---- vuln-0006 (Strix): no CVE list obtained means "exploited?" was NOT checked ----
+
+
+def _kev_ok_feeds(purl_vulns, vulns):
+    return Feeds(kev_ids=KEV_IDS, kev_status={"status": "ok"}, purl_vulns=purl_vulns, vulns=vulns)
+
+
+def test_no_answer_and_missing_details_are_urgent_with_a_fresh_kev_list():
+    purl = LOG4J.format("2.14.1")
+    (a,) = matcher.evaluate([ok(purl)], _kev_ok_feeds({purl: None}, {}))["findings"]
+    (b,) = matcher.evaluate([ok(purl)], _kev_ok_feeds({purl: ["GHSA-x-1"]}, {"GHSA-x-1": None}))["findings"]
+    for finding in (a, b):
+        assert finding["exploited_known"] is False
+        assert finding["action"] == "URGENT_HUMAN_REVIEW"
+
+
+def test_a_malformed_record_is_urgent_with_a_fresh_kev_list(monkeypatch):
+    purl = LOG4J.format("2.14.1")
+    monkeypatch.setattr(matcher, "match_vulnerability", lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
+    feeds = _kev_ok_feeds({purl: ["GHSA-x-1"]}, {"GHSA-x-1": {"id": "GHSA-x-1"}})
+    (finding,) = matcher.evaluate([ok(purl)], feeds)["findings"]
+    assert finding["rule"] == "record_malformed"
+    assert finding["exploited_known"] is False
+    assert finding["action"] == "URGENT_HUMAN_REVIEW"
