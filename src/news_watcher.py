@@ -117,7 +117,9 @@ def http_fetch(url, body=None, max_bytes=MAX_OSV_VULN_BYTES):
             while True:
                 if time.monotonic() > deadline:
                     raise FetchError("download took too long")
-                chunk = response.read(64 * 1024)
+                # read1 returns after ONE network read. A plain read(64 KB) waits until 64 KB arrived, so a server
+                # that drips a byte every few seconds would keep it blocked far beyond the total time limit.
+                chunk = getattr(response, "read1", response.read)(64 * 1024)
                 if not chunk:
                     break
                 size += len(chunk)

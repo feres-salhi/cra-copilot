@@ -862,3 +862,46 @@ def test_a_saved_kev_copy_dated_in_the_future_is_discarded(tmp_path):
 def test_a_kev_list_released_a_few_hours_ahead_is_still_accepted():
     ahead = json.loads(_kev_released(NOW + timedelta(hours=3)))
     assert nw.validate_kev(ahead, now=NOW) is None
+
+
+# ---- vuln-0009 (Strix): the total time limit must hold while a server drips bytes ----
+
+
+def test_http_fetch_total_time_limit_holds_against_a_dripping_server(monkeypatch):
+    import http.client
+    import socket
+    import threading
+    import time
+
+    server, client = socket.socketpair()
+    stop = threading.Event()
+
+    def drip():
+        try:
+            server.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+            for _ in range(200):  # one byte every 0.05 s: about 10 s in total
+                if stop.is_set():
+                    break
+                server.sendall(b"x")
+                time.sleep(0.05)
+        except OSError:
+            pass
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=drip, daemon=True)
+    thread.start()
+    response = http.client.HTTPResponse(client)
+    response.begin()
+    _patch_opener(monkeypatch, response=response)
+    monkeypatch.setattr(nw, "TOTAL_SECONDS", 0.3)
+    started = time.monotonic()
+    try:
+        with pytest.raises(FetchError, match="too long"):
+            nw.http_fetch(nw.OSV_BATCH_URL)
+        elapsed = time.monotonic() - started
+    finally:
+        stop.set()
+        client.close()
+        thread.join(timeout=2)
+    assert elapsed < 2.0  # the old code waited for the whole 64 KB read (about 10 s)
