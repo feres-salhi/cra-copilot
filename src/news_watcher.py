@@ -54,7 +54,8 @@ MAX_VERSIONS_PER_ENTRY = 20_000
 
 CVE_PATTERN = re.compile(r"CVE-[0-9]{4}-[0-9]{4,12}")
 # Vulnerability IDs go into file names, so they must match a strict pattern first.
-VULN_ID_PATTERN = re.compile(r"(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}")  # no ".." anywhere
+# No ".." anywhere and no "." at the end (the cache path check refuses a trailing dot, so the two must agree).
+VULN_ID_PATTERN = re.compile(r"(?!.*\.\.)(?:[A-Za-z0-9][A-Za-z0-9._-]{0,62}[A-Za-z0-9_-]|[A-Za-z0-9])")
 
 
 class FetchError(Exception):
@@ -536,7 +537,12 @@ def fetch_osv(purls, cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now)
     vulns = {}
     downloads = 0
     for vuln_id, modified in sorted(listed.items()):
-        path = _vuln_cache_path(cache_dir, vuln_id)
+        try:
+            path = _vuln_cache_path(cache_dir, vuln_id)
+        except ValueError:  # an id the file-name check refuses: this one vulnerability fails, the run goes on
+            vulns[vuln_id] = None
+            problems.append("could not load details of one vulnerability")
+            continue
         saved = _read_json(path)
         if _validate_vuln_record(saved, vuln_id) and same_modified_time(saved.get("modified"), modified):
             vulns[vuln_id] = slim_osv_record(saved)  # unchanged since we saved it: no download needed

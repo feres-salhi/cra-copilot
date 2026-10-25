@@ -905,3 +905,23 @@ def test_http_fetch_total_time_limit_holds_against_a_dripping_server(monkeypatch
         client.close()
         thread.join(timeout=2)
     assert elapsed < 2.0  # the old code waited for the whole 64 KB read (about 10 s)
+
+
+# ---- vuln-0011 (Strix): an id that the file-name check refuses must not abort the whole run ----
+
+
+@pytest.mark.parametrize("bad_id", ["GHSA-abcd-efgh-ijkl.", "A.", "x" * 63 + "."])
+def test_osv_id_with_a_trailing_dot_is_rejected_when_the_answer_is_read(tmp_path, bad_id):
+    net = FakeNet()
+    net.batch[LOG4J_2141] = {"vulns": [{"id": bad_id, "modified": "m"}]}
+    purl_vulns, vulns, status = nw.fetch_osv([LOG4J_2141], tmp_path, net, no_sleep, now)  # must not raise
+    assert purl_vulns[LOG4J_2141] is None
+    assert status["status"] == "failed"
+
+
+def test_one_unusable_id_cannot_abort_the_run_at_the_cache_path_step(tmp_path, monkeypatch):
+    # Even if an id passes the pattern, a refused cache path ends as "details missing", never as a crash.
+    monkeypatch.setattr(nw, "_vuln_cache_path", lambda *a: (_ for _ in ()).throw(ValueError("refused")))
+    purl_vulns, vulns, status = nw.fetch_osv([LOG4J_2141], tmp_path, FakeNet(), no_sleep, now)
+    assert status["status"] == "failed"
+    assert all(v is None for v in vulns.values())
