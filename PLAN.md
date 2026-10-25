@@ -298,3 +298,14 @@ Art. 14(8) requires informing impacted users (where appropriate in a machine-rea
 - ENISA Single Reporting Platform FAQ
 - BSI page on CRA reporting
 - NCSC-FI (Traficom) manufacturer checklist of 28 August 2026
+
+---
+
+## (h) Known limits (for the README)
+
+Things the tool does **not** protect against in version 1. The README must say them in plain words. (Decided by Fares on 2026-10-26: S3 and S7 in QUESTIONS.md.)
+
+1. **The KEV list is not checked for authenticity (S3).** KEV is CISA's list of vulnerabilities known to be exploited. The tool downloads it over a secure connection, but it does not check a signature or a pinned fingerprint. Someone who can sit on the network path *and* is trusted by the secure connection could send an old list with a newer date (a "replay") or a swapped list. Also not noticed: the very first run (nothing saved yet to compare with), a damaged saved file (the comparison is lost), and changed `dateAdded` dates.
+2. **Run records are not signed (S7).** Each run record has a "seal", which is only a fingerprint of its content. It catches a file edited by hand or a fake file, but anyone who reads the code can compute it. **Anyone who can write files on this computer is trusted.** A key stored on the same computer would not stop that person, so signing was not built.
+3. **Partial fix of vuln-0001 (a planted run file).** Only the seal described above exists. A determined person with write access to the `runs/` folder can still forge a record. Run records made before the seal existed show as "not verified".
+4. **Partial fix of vuln-0007 (KEV ids that disappear).** If the new KEV list lacks ids the saved copy had, KEV becomes stale, the run is INCOMPLETE, and the saved copy is kept. A human can accept a real removal with `cra kev accept-removals` (decision S2: the human types "yes" and a name; it is logged in `cache/kev/accepted-removals.log`). This does **not** detect the cases in limit 1.
