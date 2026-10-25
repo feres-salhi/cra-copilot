@@ -238,6 +238,8 @@ Each phase follows CLAUDE.md: build small pieces, tests pass, code-reviewer and 
 - `cra run` end to end on the demo product.
 - Final Strix scan + penetration-tester review, then README (only real test results).
 
+**Phase 5 (optional): Power BI dashboard** built on the run records in `runs/`, incomplete runs shown clearly in red.
+
 ---
 
 ## (e) Open questions for Fares
@@ -260,4 +262,39 @@ Each phase follows CLAUDE.md: build small pieces, tests pass, code-reviewer and 
 4. **Licence:** MIT.
 5. **AI paragraph:** keep the short AI paragraph in v1, with all the fact-checker protections.
 6. **Scope:** PyPI + Maven is enough for v1.
-7. **Legal check:** Fares will verify the CRA Article 14 text together with an outside reviewer before Phase 3 starts.
+7. **Legal check:** Fares will verify the CRA Article 14 text together with an outside reviewer before Phase 3 starts. **DONE (2026-10-25):** see section (g).
+
+
+---
+
+## (g) CRA legal check (2026-10-25, with an outside reviewer; not legal advice)
+
+This section records the result of open question #7. It is a reading of the regulation by a student project and an outside reviewer. It is **not legal advice**; a lawyer should confirm anything that matters for a real company.
+
+**1. Confirmed - the plan matches the regulation**
+- The 24-hour **early warning** (Art. 14(2)(a)), the 72-hour **notification** (Art. 14(2)(b)) and the **final report within 14 days after a fix is available** (Art. 14(2)(c)) match what this plan says.
+- **Recipient:** the CSIRT designated as coordinator, and ENISA, both reached through the **Single Reporting Platform** (portal.cra-srp.enisa.europa.eu, login with EU Login and multi-factor authentication). *CSIRT = a national team that handles computer security incidents.*
+- **For Germany** the coordinating CSIRT is **CERT-Bund at the BSI**.
+- **Submission is manual** through two Assigned Representatives of the manufacturer. An API (a way for programs to send reports) is expected from spring 2027. So **"the tool has no send function" stays correct**, and trust rule 6 (a human always approves, nothing is sent automatically) is unchanged.
+
+**2. Change for Phase 3 - early-warning template fields**
+The early-warning template must also contain the fields **"type of notification"** (here: vulnerability) and **"title"**, next to manufacturer name, product name and Member States.
+
+**3. Change (wording) - "REPORT CASE" is renamed**
+- Art. 3(42) defines an *actively exploited vulnerability* as one with **reliable evidence** that a malicious actor exploited it **without the permission of the system owner**.
+- A listing in the KEV list (CISA's list of known exploited vulnerabilities) alone does **not** legally prove this for the manufacturer's product.
+- So the output label **"REPORT CASE"** becomes **"POSSIBLE REPORT CASE (a human decides if it is reportable under the CRA)"**.
+- This rename is **implemented in Phase 3, together with the report writer** (not now; no code was changed for this entry). Tests, messages and docs that say "REPORT CASE" change at that time.
+
+**4. Later feature - informing users**
+Art. 14(8) requires informing impacted users (where appropriate in a machine-readable format). A **"user notice draft"** is added to the later-improvements list in QUESTIONS.md.
+
+**5. Context for the README**
+- Penalties of up to **EUR 15 million or 2.5% of worldwide annual turnover** (Art. 64).
+- **Article 14 applies from 11 September 2026** (Art. 71).
+
+**6. Sources**
+- EUR-Lex, Regulation (EU) 2024/2847 (Art. 3, 14, 64, 71)
+- ENISA Single Reporting Platform FAQ
+- BSI page on CRA reporting
+- NCSC-FI (Traficom) manufacturer checklist of 28 August 2026

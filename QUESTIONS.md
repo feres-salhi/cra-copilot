@@ -20,3 +20,8 @@ Ideas Fares noted on 2026-10-21. Nothing here is built yet; do not start before 
 
 1. **Group findings by CVE.** The same vulnerability often appears under different IDs (for example a GHSA number and a PYSEC number). Show it once, listing all its IDs, instead of once per ID.
 2. **Fewer "a human should confirm" notes (avoid alarm fatigue).** Show that note only for really uncertain CVE links (for example a link that rests only on `upstream`), not for the normal case where a GHSA advisory lists the CVE as an alias. (This changes the temporary choice of question #7.)
+3. **User notice draft (from the CRA legal check, 2026-10-25).** Art. 14(8) requires informing impacted users, where appropriate in a machine-readable format. Add a draft of this user notice, approved by a human like every other text. See PLAN.md section (g).
+
+## Decisions on security scanning (2026-10-25)
+
+- **Strix with free Gemini failed:** the free tier allows only 20 requests per day per model, far too few for an AI pentest. **Decision:** run Bandit now (free), Strix with Claude Haiku in November.
