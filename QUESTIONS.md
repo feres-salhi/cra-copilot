@@ -25,3 +25,9 @@ Ideas Fares noted on 2026-10-21. Nothing here is built yet; do not start before 
 ## Decisions on security scanning (2026-10-25)
 
 - **Strix with free Gemini failed:** the free tier allows only 20 requests per day per model, far too few for an AI pentest. **Decision:** run Bandit now (free), Strix with Claude Haiku in November.
+
+## Questions from the Strix fixes (2026-10-25, autopilot)
+
+| # | Question | Temporary (safe) choice used |
+|---|---|---|
+| S1 | Maven versions in capital letters (`1.0-RC1`): does OSV match them case-sensitively? Should they be UNKNOWN like capital group/artifact names? | Still accepted as OK (not verified offline). |

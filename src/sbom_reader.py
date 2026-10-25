@@ -36,7 +36,9 @@ PURL_PATTERN = re.compile(r"pkg:[A-Za-z0-9._+~:/@!-]+(\?[A-Za-z0-9._=&-]+)?")
 HARMLESS_QUALIFIERS = {"type", "classifier"}
 QUALIFIER_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,32}")
 # Each part of a Maven group id (the purl "namespace"), e.g. org / apache / logging.
-GROUP_SEGMENT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+GROUP_SEGMENT_PATTERN = re.compile(r"[A-Za-z0-9]+([._-][A-Za-z0-9]+)*")  # no trailing or doubled separators
+# A Maven artifactId: no ":", "@" or "~", which can never be part of a real one.
+ARTIFACT_PATTERN = re.compile(r"[A-Za-z0-9]+([._-][A-Za-z0-9]+)*")
 PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-zÄÖÜäöüß0-9][A-Za-zÄÖÜäöüß0-9 ._,&()+-]*")
 
 EU_MEMBER_STATES = {
@@ -143,10 +145,19 @@ def _read_component(raw):
         return unknown("maven purl has no namespace", ecosystem)
     if ecosystem == "pypi" and parsed.namespace:
         return unknown("pypi purl must not have a namespace", ecosystem)
+    if ecosystem == "maven" and "/" in parsed.namespace:
+        # A group id is written with dots. OSV does not understand slashes, so a slash spelling would
+        # look "clean" (no advisory found). Fail closed: a human must look.
+        return unknown("maven purl namespace must use dots, not slashes", ecosystem)
+    if ecosystem == "maven" and (parsed.namespace != parsed.namespace.lower() or parsed.name != parsed.name.lower()):
+        # OSV matches Maven names case-sensitively and we cannot confirm which spelling it uses.
+        return unknown("maven purl has capital letters: spelling cannot be confirmed", ecosystem)
     if ecosystem == "maven":
         segments = parsed.namespace.split("/")
         if not all(GROUP_SEGMENT_PATTERN.fullmatch(s) and ".." not in s for s in segments):
             return unknown("maven purl namespace has invalid characters", ecosystem)
+        if not ARTIFACT_PATTERN.fullmatch(parsed.name):
+            return unknown("maven purl artifact name has invalid characters", ecosystem)
         group, group_problem = _clean(raw.get("group"), NAME_PATTERN)
         if group_problem == "invalid" or (group is not None and group != parsed.namespace.replace("/", ".")):
             return unknown("purl namespace does not match group", ecosystem)
@@ -157,6 +168,8 @@ def _read_component(raw):
 
     # Keep a canonical purl rebuilt from its parts (no qualifiers), never the raw text.
     canonical = PackageURL(parsed.type, parsed.namespace, parsed.name, parsed.version).to_string()
+    if "%" in canonical:  # the rebuilt purl had to escape something: it is not a plain, matchable identity
+        return unknown("purl is not in plain canonical form", ecosystem)
     return Component(name, version, canonical, ecosystem, "OK")
 
 

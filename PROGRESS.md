@@ -341,3 +341,13 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 **Systemic theme:** in several places the tool treated "no answer" or "well-formed" as proof that a check was *complete*. The fix direction is: uncertain means UNKNOWN or INCOMPLETE, never "safe".
 
 **How it connects:** Part C of this work fixes these findings one by one, each with a test that fails first.
+
+---
+
+## Fixing the Strix findings (Part C)
+
+### Fix vuln-0004 — odd Maven spellings looked "clean" (Medium)
+- **What was wrong:** a Maven component written as `pkg:maven/org/apache/logging/log4j/log4j-core@2.14.1` (slashes) or with capital letters was accepted as fine. OSV (the vulnerability database) does not know those spellings, found nothing, and the tool said "no problems" for a Log4Shell component.
+- **The fix:** in `src/sbom_reader.py` such a component now becomes UNKNOWN ("a human must look") with a clear reason. Slashes in the group, capital letters, and names that cannot exist (`@`, `:`, `~`, trailing dots) are refused. A purl that needed `%` escapes when rebuilt is refused too. Trade-off: real Maven names with capitals (like `xercesImpl`) now need a human look. That is the safe side.
+- **Tests:** 4 new tests for the slash and capital-letter spellings failed on the old code (4 failed) and pass now. The old test that expected `a//b` to be OK was changed to expect UNKNOWN. After the security reviewer found more odd spellings, I added 5 more tests together with the stricter check (these were not run on the old code first). Full suite: **415 passed, 3 skipped, 0 failed.**
+- **Reviews:** code reviewer: nothing blocking. Security auditor: found the `@`/`:`/`~`/trailing-dot gaps, fixed. Not fixed: a version in capitals (`1.0-RC1`) is still accepted; unclear how OSV treats it, written to QUESTIONS.md.
