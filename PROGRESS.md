@@ -444,3 +444,5 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **Full test suite** (`.venv\Scripts\python -m pytest`): **445 passed, 3 skipped, 0 failed.**
 - **Bandit** (`.venv\Scripts\python -m bandit -r src`): **No issues identified.** 1,537 lines scanned; issues by severity: Undefined 0, Low 0, Medium 0, High 0; by confidence: all 0; 0 lines skipped with `#nosec`.
 - **Not run:** Strix (not allowed in this order), a secrets scan (nothing pushed), the optional live tests.
+
+- **Claim checked afterwards (Verify vuln-0012 claim):** I re-read `save_run`: it does catch `PermissionError` together with `FileExistsError`, and it stops after `MAX_NAME_TRIES = 1000` names (the plain name plus `-0002` ... `-1000`) by re-raising. A throwaway script (not committed) forced "denied" on every try and got `PermissionError` after exactly 1000 attempts; with the first two tries denied, the run was saved as `...-0003.json`. **No committed test covers this PermissionError / limit path** (only the 16-thread test exists), so it was checked by hand, not by the test suite.
