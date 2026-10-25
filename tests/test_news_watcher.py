@@ -829,3 +829,36 @@ def test_a_folder_over_the_total_byte_budget_is_incomplete_never_clean(tmp_path,
     assert ok is False
     assert "RESULT INCOMPLETE" in text and "budget" in text
     assert "Latest run: all sources ok." not in text
+
+
+# ---- vuln-0008 (Strix): a KEV list dated in the future must not freeze the saved copy ----
+
+
+def _kev_released(when):
+    changed = copy.deepcopy(REAL_KEV)
+    changed["dateReleased"] = when.isoformat()
+    return json.dumps(changed).encode()
+
+
+def test_a_future_dated_kev_list_is_rejected_and_does_not_freeze_updates(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    _, status = nw.fetch_kev(tmp_path, FakeNet(kev=_kev_released(NOW + timedelta(days=400))), no_sleep, now)
+    assert status["status"] == "stale" and "future" in status["detail"]
+    # a later genuine download (dated before now, after the saved copy) is still accepted
+    genuine = _kev_released(NOW - timedelta(hours=1))
+    _, status = nw.fetch_kev(tmp_path, FakeNet(kev=genuine), no_sleep, now)
+    assert status["status"] == "ok"
+
+
+def test_a_saved_kev_copy_dated_in_the_future_is_discarded(tmp_path):
+    nw.fetch_kev(tmp_path, FakeNet(), no_sleep, now)
+    path = tmp_path / "kev" / "kev-saved.json"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["data"]["dateReleased"] = (NOW + timedelta(days=400)).isoformat()
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    assert nw.load_kev_cache(tmp_path, now) == (None, None)
+
+
+def test_a_kev_list_released_a_few_hours_ahead_is_still_accepted():
+    ahead = json.loads(_kev_released(NOW + timedelta(hours=3)))
+    assert nw.validate_kev(ahead, now=NOW) is None

@@ -43,6 +43,7 @@ MAX_CACHE_FILE_BYTES = 20 * 1024 * 1024
 RETRIES = 3  # after the first try
 BATCH_SIZE = 500  # OSV allows at most 1000 queries per batch
 MAX_PAGE_ROUNDS = 20
+MAX_KEV_FUTURE = timedelta(days=1)  # allowed clock difference for a KEV release date
 MAX_KEV_DROP = 0.05  # the count may not drop by more than 5% below the highest count we have seen
 STALE_AFTER_HOURS = 26
 MIN_KEV_ENTRIES = 1000  # the real list has had far more than this for years; a tiny list is not trusted
@@ -200,8 +201,8 @@ def _parse_time(text):
 # ---------------------------------------------------------------- CISA KEV
 
 
-def validate_kev(data, saved_max_count=None, saved_released=None):
-    """Return a problem text if the KEV data is not trustworthy, else None."""
+def validate_kev(data, saved_max_count=None, saved_released=None, now=None):
+    """Return a problem text if the KEV data is not trustworthy, else None. `now` is a datetime."""
     if not isinstance(data, dict):
         return "KEV data is not a JSON object"
     for key in ("catalogVersion", "dateReleased", "count", "vulnerabilities"):
@@ -210,6 +211,9 @@ def validate_kev(data, saved_max_count=None, saved_released=None):
     released = _parse_time(data["dateReleased"])
     if released is None:
         return "KEV dateReleased is not a valid time"
+    if released > (now or utc_now()) + MAX_KEV_FUTURE:
+        # A list dated far ahead would make every later genuine list look like a "replay" and freeze updates.
+        return "KEV dateReleased is in the future"
     entries = data["vulnerabilities"]
     if not isinstance(entries, list) or not entries:
         return "KEV vulnerability list is missing or empty"
@@ -242,12 +246,12 @@ def validate_kev(data, saved_max_count=None, saved_released=None):
     return None
 
 
-def load_kev_cache(cache_dir):
+def load_kev_cache(cache_dir, now=utc_now):
     """Return (data, meta) of the saved KEV copy, or (None, None). Structure is re-checked."""
     saved = _read_json(Path(cache_dir) / "kev" / "kev-saved.json")
     if not isinstance(saved, dict) or not isinstance(saved.get("data"), dict):
         return None, None
-    if validate_kev(saved["data"]) is not None:
+    if validate_kev(saved["data"], now=now()) is not None:
         return None, None
     meta = {k: saved.get(k) for k in ("downloaded_at", "sha256", "max_count")}
     return saved["data"], meta
@@ -255,7 +259,7 @@ def load_kev_cache(cache_dir):
 
 def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
     """Download the KEV list. Returns (data_or_None, status_dict)."""
-    saved, saved_meta = load_kev_cache(cache_dir)
+    saved, saved_meta = load_kev_cache(cache_dir, now)
     saved_meta = saved_meta or {}
     saved_count_value = saved_meta.get("max_count")
     if not isinstance(saved_count_value, int) or isinstance(saved_count_value, bool) or not 0 <= saved_count_value <= MAX_COUNT_VALUE:
@@ -263,7 +267,7 @@ def fetch_kev(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_now):
     saved_max = max(len(saved["vulnerabilities"]) if saved else 0, saved_count_value)
     try:
         raw, data = _fetch_json(fetch, sleep, KEV_URL, None, MAX_KEV_BYTES)
-        problem = validate_kev(data, saved_max or None, saved["dateReleased"] if saved else None)
+        problem = validate_kev(data, saved_max or None, saved["dateReleased"] if saved else None, now())
         if problem:
             raise FetchError(problem)
         data = slim_kev(data)  # keep only IDs and dates: no free text is saved
