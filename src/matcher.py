@@ -109,11 +109,16 @@ def _intervals(events, parse):
                 if key is None:
                     return None
                 parsed.append((key, 0 if kind == "introduced" else 1, kind == "last_affected"))
-    parsed.sort(key=lambda item: (item[0], item[1]))  # at the same version a start comes first
+    # Sort by version only. Python's sort is stable, so events at the SAME version keep the order they were
+    # written in: "fixed 2.0" then "introduced 2.0" means affected again from 2.0 on. (Forcing starts first
+    # used to swallow the re-introduction.) A tie written in an odd order ends as "end without a start" = UNKNOWN.
+    parsed.sort(key=lambda item: item[0])
     intervals = []
-    for key, is_end, inclusive in parsed:
+    for position, (key, is_end, inclusive) in enumerate(parsed):
         if not is_end:
             if intervals and intervals[-1][1] is None:
+                if any(later[0] == key and later[1] for later in parsed[position + 1:]):
+                    return None  # "introduced X" before "fixed X" inside an open range: the order is ambiguous
                 continue  # already inside an open interval: the earlier start is the one that counts
             intervals.append([key, None, False])
         else:

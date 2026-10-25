@@ -634,3 +634,33 @@ def test_a_malformed_record_is_urgent_with_a_fresh_kev_list(monkeypatch):
     assert finding["rule"] == "record_malformed"
     assert finding["exploited_known"] is False
     assert finding["action"] == "URGENT_HUMAN_REVIEW"
+
+
+# ---- vuln-0005 (Strix): a fix and a re-introduction at the SAME version ----
+
+MAVEN_PURL = "pkg:maven/org.example/lib@{}"
+
+
+def test_reintroduced_at_the_fixed_version_is_still_affected_after_it_maven():
+    record = maven_record([{"introduced": "0"}, {"fixed": "2.0"}, {"introduced": "2.0"}])
+    assert status(MAVEN_PURL.format("1.5"), record)[0] == AFFECTED
+    assert status(MAVEN_PURL.format("2.5"), record)[0] == AFFECTED  # was wrongly NOT_AFFECTED
+
+
+def test_reintroduced_at_the_fixed_version_is_still_affected_after_it_pypi():
+    record = {"id": "PYSEC-test-1", "affected": [{
+        "package": {"ecosystem": "PyPI", "name": "lib"},
+        "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "2.0"}, {"introduced": "2.0"}]}],
+    }]}
+    assert status("pkg:pypi/lib@2.5", record)[0] == AFFECTED
+
+
+def test_a_tie_in_reversed_order_is_never_not_affected():
+    record = maven_record([{"fixed": "2.0"}, {"introduced": "2.0"}])
+    assert status(MAVEN_PURL.format("2.5"), record)[0] != NOT_AFFECTED
+
+
+def test_an_ambiguous_tie_inside_an_open_range_is_unknown():
+    # "introduced 2, fixed 2" while a range from 1 is open could be a re-order of "fixed 2, introduced 2".
+    record = maven_record([{"introduced": "1"}, {"introduced": "2.0"}, {"fixed": "2.0"}])
+    assert status(MAVEN_PURL.format("3"), record)[0] == UNKNOWN

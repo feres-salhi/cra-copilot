@@ -363,3 +363,9 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **The fix (`src/matcher.py`, one line each on three paths, plus the CLI message in `src/cli.py`):** these findings now say "exploited status NOT known" and become **URGENT HUMAN REVIEW**.
 - **Tests:** 3 new tests, 3 failed on the old code and pass now (the no-answer, details-missing and malformed-record paths). Full suite: **422 passed, 3 skipped, 0 failed.**
 - **Reviews:** code reviewer: nothing. Security auditor: the three paths are right; it named two more places, which are **policy decisions I did not make** (QUESTIONS.md S4, S5): components without a purl, and advisories that list no CVE id at all.
+
+### Fix vuln-0005 — a fix and a re-introduction at the same version hid an affected version (Low)
+- **What was wrong:** OSV describes affected versions as events like "introduced 0", "fixed 2.0", "introduced 2.0" (fixed, then broken again). The matcher sorted ties so that every "introduced" came before every "fixed" at the same version, which swallowed the re-introduction. Version 2.5 then looked NOT affected.
+- **The fix (`src/matcher.py`, `_intervals`):** events at the same version now keep the order they were written in. If the order is ambiguous (an "introduced X" written before a "fixed X" inside an open range, which could be a re-ordered list), the answer is UNKNOWN, not "safe".
+- **Tests:** 4 new tests; 3 failed on the old code (maven, pypi, reversed tie) and pass now; the 4th (ambiguous tie) was added with the extra safety rule, and would have failed on the old code too (it said NOT_AFFECTED). Full suite: **426 passed, 3 skipped, 0 failed.**
+- **Reviews:** code reviewer: nothing. Security auditor tried every order of 2-5 events and found no wrong "safe" answer except the ambiguous tie, which I made UNKNOWN. OSV does not define the order of tied events, so this is a design choice noted here.
