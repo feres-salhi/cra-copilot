@@ -620,14 +620,42 @@ def run_is_complete(run):
 MAX_RUN_FILES = 1000
 
 
+def _run_file_problem(detail, path, now=utc_now):
+    """A run file that cannot be used is NOT skipped: it stands in as an incomplete run.
+
+    Skipping it would let `status` show an older clean run as "the latest" (Strix vuln-0013).
+    Its time is the file's modification time (or "now" if even that cannot be read, so it still counts as newest).
+    """
+    try:
+        finished = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        finished = now()
+    return {
+        "finished_at": finished.isoformat(),
+        "complete": False,
+        "sources": {"run_file": {"status": "failed", "detail": detail}},
+        "components": {},
+    }
+
+
 def load_runs(run_dir):
     """Return all readable run files as a list of dicts, oldest first (by their finished_at time)."""
     runs = []
     paths = sorted(Path(run_dir).glob("*.json"))[-MAX_RUN_FILES:]
     for path in paths:
-        data = _read_json(path)
-        if isinstance(data, dict) and isinstance(data.get("finished_at"), str):
-            runs.append((_parse_time(data["finished_at"]), path.stem, data))
+        try:
+            if not path.is_file():
+                continue  # a folder or a broken link named *.json is not a run record
+            too_large = path.stat().st_size > MAX_CACHE_FILE_BYTES
+        except OSError:
+            too_large = False
+        data = None if too_large else _read_json(path)
+        if too_large:
+            data = _run_file_problem("a run record is too large to read (too large)", path)
+        elif not (isinstance(data, dict) and isinstance(data.get("finished_at"), str)
+                  and _parse_time(data["finished_at"]) is not None):
+            data = _run_file_problem("a run record is damaged or unreadable (unreadable)", path)
+        runs.append((_parse_time(data["finished_at"]), path.stem, data))
     # Runs whose time cannot be read sort first and are never used as "the latest".
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     runs.sort(key=lambda item: (item[0] or epoch, item[1]))

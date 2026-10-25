@@ -443,9 +443,12 @@ def test_status_when_no_run_was_ever_successful(tmp_path):
     assert "RESULT INCOMPLETE" in text
 
 
-def test_a_damaged_run_file_is_ignored(tmp_path):
+def test_a_damaged_run_file_is_never_ignored(tmp_path):
+    # vuln-0013: a damaged file stands in as an INCOMPLETE run instead of vanishing.
     (tmp_path / "2026-01-01T00-00-00Z.json").write_text("{ nope", encoding="utf-8")
-    assert "no run found" in nw.status_report(tmp_path, now)[0]
+    lines, ok = nw.status_summary(tmp_path, now)
+    assert ok is False
+    assert "RESULT INCOMPLETE" in "\n".join(lines)
 
 
 def test_modified_times_with_6_and_9_decimals_count_as_the_same():
@@ -730,3 +733,35 @@ def test_a_run_with_dropped_kev_ids_is_incomplete(tmp_path):
     assert feeds.kev_status["status"] == "stale"
     assert not feeds.complete
     assert "CVE-2021-44228" in feeds.kev_ids  # the saved copy still protects us
+
+
+# ---- vuln-0013 (Strix): a run file that is too big to read must never be skipped silently ----
+
+
+def test_an_oversized_latest_run_file_is_never_skipped(tmp_path, monkeypatch):
+    import os
+    nw.save_run(tmp_path, _run(NOW - timedelta(hours=5), {"kev": "ok", "osv": "ok"}), lambda: NOW - timedelta(hours=5))
+    big = tmp_path / "2026-01-01T00-00-00Z-big.json"
+    big.write_text('{"finished_at": "x", "pad": "' + "x" * 5000 + '"}', encoding="utf-8")
+    newer = (NOW - timedelta(hours=1)).timestamp()
+    os.utime(big, (newer, newer))
+    monkeypatch.setattr(nw, "MAX_CACHE_FILE_BYTES", 2000)
+    lines, ok = nw.status_summary(tmp_path, now)
+    text = "\n".join(lines)
+    assert ok is False
+    assert "RESULT INCOMPLETE" in text
+    assert "too large" in text
+    assert "Latest run: all sources ok." not in text
+
+
+@pytest.mark.parametrize("content", ["{ nope", "[1, 2]", '{"finished_at": "2026-01-01T00:00:00"}', '{"finished_at": 5}'])
+def test_an_unreadable_newer_run_file_hides_no_older_clean_run(tmp_path, content):
+    import os
+    nw.save_run(tmp_path, _run(NOW - timedelta(hours=5), {"kev": "ok", "osv": "ok"}), lambda: NOW - timedelta(hours=5))
+    bad = tmp_path / "zz-bad.json"
+    bad.write_text(content, encoding="utf-8")
+    newer = (NOW - timedelta(hours=1)).timestamp()
+    os.utime(bad, (newer, newer))
+    lines, ok = nw.status_summary(tmp_path, now)
+    assert ok is False
+    assert "Latest run: all sources ok." not in "\n".join(lines)
