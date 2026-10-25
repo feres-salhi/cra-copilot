@@ -468,3 +468,11 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
   - Tests added for the real-keyboard path, the failed replace, the stored highest count, the newer-copy case, and the explanation for the 5% case.
 - **Not fixed, on purpose:** the exit code is 1 both for "cancelled" and for "error"; no lock file against two commands running at the same moment (the check above covers the dangerous case). Reviewers found no way around the question and no injection through the typed name (control characters and look-alike direction marks are refused; the log line is JSON).
 - **Not run (not allowed in this order):** Strix, a secrets scan, the optional live tests.
+
+## Phase 3 (started 2026-10-26)
+
+### Piece 1 - the label "REPORT CASE" is now "POSSIBLE REPORT CASE (...)"
+- **Why:** PLAN.md section (g): being on the KEV list does not legally prove "actively exploited" for the manufacturer's product, so the tool must not call it a plain report case.
+- **What changed:** every text a person reads (run output, `status` warning, help text, PLAN.md table) now says **POSSIBLE REPORT CASE (a human decides if it is reportable under the CRA)**. The inside name `REPORT_CASE` and the exit code 3 are unchanged, because other code depends on them. The run output also keeps a line reminding about the 24-hour deadline (the reviewers noticed the new label had dropped that hint).
+- **Tests:** 4 new tests in `tests/test_label_rename.py` (3 failed on the old code, 1 guard already passed); 2 old tests were tightened. Full suite: **485 passed, 3 skipped, 0 failed.**
+- **Reviews:** code reviewer and security auditor: no blocking problem. I followed their small points (stricter tests, the 24-hour line, a path that does not depend on the folder). The label is long (78 characters) and repeats on every line; I kept it because PLAN.md section (g) asks for exactly this wording.

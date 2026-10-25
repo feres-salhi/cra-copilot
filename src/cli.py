@@ -12,7 +12,7 @@ Exit codes of `run`:
     0 = complete result, nothing exploited and affected found
     1 = RESULT INCOMPLETE or something needs a human look (unknown / affected but not exploited)
     2 = input rejected
-    3 = at least one REPORT CASE (an affected component with an actively exploited vulnerability)
+    3 = at least one POSSIBLE REPORT CASE (an affected component with an actively exploited vulnerability)
 Exit codes of `check-sbom`: 0 = all fine, 1 = RESULT INCOMPLETE (UNKNOWN component or warning), 2 = rejected.
 
 The tool NEVER sends anything. A human always decides (CLAUDE.md rule 6).
@@ -140,8 +140,10 @@ def _run(args):
     by_action = {}
     for finding in findings:
         by_action.setdefault(finding["action"], []).append(finding)
+    if by_action.get("REPORT_CASE"):
+        print("Check the 24-hour deadline: the clock may be running (it starts when your company becomes aware).")
     for action, title in (
-        ("REPORT_CASE", "REPORT CASE (affected AND actively exploited - the 24-hour clock may be running)"),
+        ("REPORT_CASE", matcher.REPORT_CASE_LABEL),
         ("URGENT_HUMAN_REVIEW", "URGENT HUMAN REVIEW"),
         ("HUMAN_REVIEW", "Human review"),
         ("RECORD", "Recorded (affected, not known to be exploited)"),
