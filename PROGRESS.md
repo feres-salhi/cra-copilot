@@ -293,3 +293,17 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 **How it connects:** Phases 1 and 2 give the tool its "eyes and brain": a safe SBOM reader, careful downloads, and a matcher that says AFFECTED / NOT_AFFECTED / UNKNOWN and whether it is actively exploited — and says "RESULT INCOMPLETE" instead of guessing. Phase 3 (not started, as ordered) will turn a *report case* into German and English text.
 
 ---
+
+## Outside check: Bandit (2026-10-25)
+
+**What Bandit is:** a free tool that reads Python code (without running it) and warns about patterns that are often unsafe, for example running shell commands, `eval`, weak hashes, hard-coded passwords or unsafe XML/pickle use. It is an outside check on top of our own reviews.
+
+**What was run:** Bandit 1.9.4 (now pinned in `requirements-dev.txt`) with `.venv\Scripts\python -m bandit -r src -f txt -o reports\bandit-2026-10-25.txt`, on Python 3.14.7. Full report: `reports/bandit-2026-10-25.txt`.
+
+**Real numbers from the report:**
+- Code scanned: 1,421 lines in `src/`. Lines skipped with `#nosec`: 0. Issues switched off on purpose: 0.
+- Issues by severity: Undefined 0, Low 0, Medium 0, High 0.
+- Issues by confidence: Undefined 0, Low 0, Medium 0, High 0.
+- Result text: "No issues identified." Files skipped: 0.
+
+**Assessment:** there are no findings, so there is nothing to call a real risk or a false alarm, and nothing was fixed. This is a narrow result. Bandit only checks `src/` for known risky Python patterns. It does not check `tests/`, the logic of the matcher, the dependencies (that would need a tool such as `pip-audit`, which we do not use), or how the program behaves when run. It does not replace the reviews and the penetration-tester check already done. Nothing here changes the earlier statements in this file.
