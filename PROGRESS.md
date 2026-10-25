@@ -446,3 +446,25 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **Not run:** Strix (not allowed in this order), a secrets scan (nothing pushed), the optional live tests.
 
 - **Claim checked afterwards (Verify vuln-0012 claim):** I re-read `save_run`: it does catch `PermissionError` together with `FileExistsError`, and it stops after `MAX_NAME_TRIES = 1000` names (the plain name plus `-0002` ... `-1000`) by re-raising. A throwaway script (not committed) forced "denied" on every try and got `PermissionError` after exactly 1000 attempts; with the first two tries denied, the run was saved as `...-0003.json`. **No committed test covers this PermissionError / limit path** (only the 16-thread test exists), so it was checked by hand, not by the test suite.
+## Decisions by Fares on 2026-10-26 (S2, S3, S7) and the new command
+
+### Decisions (written into QUESTIONS.md and PLAN.md section (h))
+- **S2:** build the command `cra kev accept-removals`. **Done, see below.**
+- **S3:** no check that the KEV list is genuine in version 1. Documented as a known limit: someone on the network path whom the secure connection trusts could send an old list again or swap the list.
+- **S7:** run records are not signed. The seal stays a simple fingerprint. Anyone who can write files on this computer is trusted, because a key stored on the same computer would not stop that person.
+- All other S rows (S1, S4-S6, S8-S15) keep their temporary safe choice.
+- PLAN.md has a new section **(h) Known limits (for the README)** with S3, S7 and the partial fixes of vuln-0001 and vuln-0007 in simple words.
+
+### Built: `cra kev accept-removals` (decision S2)
+- **What it does:** it downloads the KEV list once and compares it with the saved copy. If no CVE id disappeared, it says so and changes nothing. Otherwise it prints every disappeared id and the sizes and release dates of both lists, then asks the human to type `yes` and then their name. Anything else cancels and changes nothing. Only after both answers it writes one line to `cache/kev/accepted-removals.log` (time, name, ids, fingerprint of the new list, and the old and new "highest count") and replaces `cache/kev/kev-saved.json`.
+- **No way around the question:** there is no `--yes` flag (tests try `--yes`, `-y`, `--force`, `--assume-yes`: all rejected). Typed answers that are piped in or come from a scheduled task do not count: without a real keyboard it cancels. `cra run` never calls it.
+- **All other KEV checks still apply** (structure, future date, count drop of more than 5%, list older than the saved copy). A drop of more than 5% cannot be accepted with this command; the message says a human must then check it and delete the saved file by hand.
+- **Highest count after acceptance:** the accepted smaller list becomes the new "highest count" (else every later normal download would fail the 5% rule). The log records the old and the new value.
+- **Tests:** written first; 30 of the 31 first tests failed before the code existed (the 31st was a guard that already passed). After the reviews there are **36 tests** in `tests/test_kev_accept_removals.py`. Full suite: **481 passed, 3 skipped, 0 failed.** Bandit on `src`: no output (no issues shown).
+- **Reviews (code reviewer and security auditor), what I fixed:**
+  - The log said "accepted" even if replacing the saved copy then failed. Now a `FAILED` line is added, and the log is flushed to disk first.
+  - While the human was typing, a `cra run` could save a newer list, and "yes" would then overwrite it with the older one. Now the saved copy is checked again right before replacing it; if it changed, nothing is changed.
+  - The screen now shows counts and release dates, not only the ids.
+  - Tests added for the real-keyboard path, the failed replace, the stored highest count, the newer-copy case, and the explanation for the 5% case.
+- **Not fixed, on purpose:** the exit code is 1 both for "cancelled" and for "error"; no lock file against two commands running at the same moment (the check above covers the dangerous case). Reviewers found no way around the question and no injection through the typed name (control characters and look-alike direction marks are refused; the log line is JSON).
+- **Not run (not allowed in this order):** Strix, a secrets scan, the optional live tests.
