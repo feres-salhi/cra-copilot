@@ -307,3 +307,37 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - Result text: "No issues identified." Files skipped: 0.
 
 **Assessment:** there are no findings, so there is nothing to call a real risk or a false alarm, and nothing was fixed. This is a narrow result. Bandit only checks `src/` for known risky Python patterns. It does not check `tests/`, the logic of the matcher, the dependencies (that would need a tool such as `pip-audit`, which we do not use), or how the program behaves when run. It does not replace the reviews and the penetration-tester check already done. Nothing here changes the earlier statements in this file.
+
+---
+
+## Outside check: Strix AI penetration test (2026-10-25)
+
+**What Strix is:** a tool where an AI plays the attacker. It reads the code, tries hostile inputs and reports what it could break. It is an outside check on top of our own reviews.
+
+**What was run (real numbers from `reports/strix-2026-10-25/`):** Strix v1.7.0 with Claude Haiku 5.5, quick mode. About 100.7 million tokens (100,849,428 in `run.json`, 456 requests), cost $7.29. Scope: the runtime code in `src/`. Full report: `reports/strix-2026-10-25/penetration_test_report.md`.
+
+**Result: 11 findings: 0 Critical, 0 High, 2 Medium, 9 Low.** The tool runs locally and opens no network port; the real risk is a *wrong regulatory answer* (a reportable case shown as "clean"), not a break-in.
+
+| ID | Severity | In one simple sentence |
+|---|---|---|
+| vuln-0004 | Medium | A Maven component written with slashes or capital letters was accepted as fine, OSV found nothing for that spelling, and a Log4Shell component looked clean. |
+| vuln-0007 | Medium | A KEV list with known-exploited CVEs quietly removed was still accepted as complete. |
+| vuln-0001 | Low | A fake run file planted in the runs folder can make `status` say everything is fine. |
+| vuln-0002 | Low | `status` loads every run file into memory with no total size limit. |
+| vuln-0005 | Low | When a fix and a re-introduction share one version number, the range is sorted wrongly and an affected version looks unaffected. |
+| vuln-0006 | Low | If OSV gave no answer for a component, it was still marked "we know it is not exploited". |
+| vuln-0008 | Low | One KEV answer dated in the future would freeze the saved copy so real updates are refused. |
+| vuln-0009 | Low | The 120-second download limit was only checked between reads, so a slowly dripping server could stall a run. |
+| vuln-0011 | Low | An OSV id ending in a dot crashed the whole run. |
+| vuln-0012 | Low | Two runs finishing in the same second could overwrite each other's record. |
+| vuln-0013 | Low | A run record over 20 MB was silently skipped by `status`, which then showed an older clean run. |
+
+**Controls Strix confirmed as working:** SBOM limits (depth, size, duplicate keys, NaN/Infinity, component count) held under about 30,000 fuzzed components and 3,000 file mutations; terminal-escape injection is blocked; path containment holds (OSV ids, symlinks, evidence ids); redirects are refused, the host list and TLS checks hold; cache keys are hashed and cache poisoning by purl was not reproduced.
+
+**Open items Strix did not file (need maintainer decisions, see QUESTIONS.md):** batch answers are matched to components by position (only the count is checked); OSV `limit` events are ignored; PEP 440 local-label stripping; KEV link through `upstream`; urgency of components without a purl.
+
+**Limits of this check (from the report):** no web search, so the pinned dependencies were not checked against advisory databases; the KEV attack assumes an on-path attacker with a trusted certificate and was simulated, not seen on the real network; fixes were tested only in working copies, the repository was not changed.
+
+**Systemic theme:** in several places the tool treated "no answer" or "well-formed" as proof that a check was *complete*. The fix direction is: uncertain means UNKNOWN or INCOMPLETE, never "safe".
+
+**How it connects:** Part C of this work fixes these findings one by one, each with a test that fails first.

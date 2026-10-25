@@ -1,0 +1,973 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-25 22:08:45 UTC",
+  "run_id": "cra-scan_745f",
+  "run_name": "cra-scan_745f",
+  "scope": {
+    "targets": [
+      {
+        "type": "local_code",
+        "details": {
+          "target_path": "/tmp/cra-scan",
+          "workspace_subdir": "cra-scan"
+        },
+        "original": "/tmp/cra-scan"
+      }
+    ],
+    "scan_mode": "quick",
+    "scope_mode": "auto",
+    "diff_scope": {
+      "active": false,
+      "mode": "auto"
+    },
+    "instruction": ""
+  },
+  "summary": {
+    "surfaces_reviewed": 66,
+    "outcomes": {
+      "reported": 11,
+      "no_issue_found": 17,
+      "ruled_out": 29,
+      "not_applicable": 3,
+      "needs_follow_up": 6
+    },
+    "findings_filed": 11,
+    "gaps": 8
+  },
+  "machine_observed": {
+    "agents": [
+      {
+        "agent_id": "9103d8bf",
+        "agent_name": "Feed Fetch and Cache Agent",
+        "status": "completed",
+        "skills": [
+          "path_traversal_lfi_rfi",
+          "ssrf"
+        ],
+        "task": "Validate the remote-feed fetch and local cache code in /workspace/cra-scan/src/news_watcher.py (http_fetch with the custom redirect handler at ~line 75, _fetch_json, fetch_kev, validate_kev, fetch_osv, _query_purls, _parse_batch_result, _validate_vuln_record, _vuln_cache_path/_purl_cache_path using safe_join from src/safe_paths.py, _write_json_atomic, _read_json, load_kev_cache). First call get_threat_model on /workspace/cra-scan and follow it. Work on a COPY: copy /workspace/cra-scan to /workspace/poc-feed/ and test there. Use a local HTTP server (python3 -m http.server or a small script) and monkeypatch or inject the fetch= parameter that these functions accept to simulate hostile feed responses, since the feed URLs are hard-coded HTTPS. Test: (1) path traversal via OSV vulnerability IDs (e.g. \"../\", absolute paths, NUL bytes, unicode, symlinks already in the cache dir) into _vuln_cache_path and safe_join: can a crafted id write outside the cache folder? Check safe_join's actual containment logic; (2) redirect handling in the custom redirect handler: does it allow a redirect to a non-HTTPS or internal host, and does it honor the size and timeout caps; (3) response-size and decompression bombs; (4) KEV validate_kev bypass that lets a malformed or truncated feed replace the saved good cache (fail-open completeness check, see run_is_complete / sources_ok / complete); (5) cache poisoning via a crafted purl or id that overwrites another entry; (6) atomic write / temp file handling races. Run the existing pytest suite in the copy as a baseline. For each confirmed issue, do the counterevidence pass and file with create_vulnerability_report including code_locations with fix_before/fix_after verified in the copy and http_exchange_ids if you captured any proxy exchanges (otherwise omit). Record coverage for every surface you assess, including clean ones. Load skills path_traversal_lfi_rfi and ssrf first.",
+        "is_root": false
+      },
+      {
+        "agent_id": "6064b7d6",
+        "agent_name": "Matcher Logic Agent",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "path_traversal_lfi_rfi"
+        ],
+        "task": "Validate the correctness and integrity of the affected/exploited decision logic in /workspace/cra-scan/src/matcher.py (match_vulnerability, _check_entry, _check_entry_maven, _check_entry_pypi, _intervals, _in_intervals, _usable_ranges, _unsupported_range_types, maven_version_key, maven_limit_key, _pypi_version, _numbers, normalize_pypi_name, _package_identity, _entry_matches, exploited_status, action_for, evaluate, read_evidence, invalid_evidence_cves). First call get_threat_model on /workspace/cra-scan and follow it. The tool's purpose is to decide whether a component is affected and actively exploited, so the high-value bugs are wrong-result bugs with a reproducible input: a KEV-listed or clearly affected component reported as not affected, or an unaffected one reported as affected, without evidence. Work on a COPY at /workspace/poc-matcher/ and drive the functions directly from Python with crafted OSV-style records (affected ranges with introduced/fixed/last_affected events, mixed-case or normalized PyPI names, Maven version strings with qualifiers like -RC1, -alpha, -SNAPSHOT, ranges with unsupported types, 'versions' exact lists, purl qualifiers and namespace handling) and with the demo data in tests/fixtures and demo-data/. Compare the result against a hand-computed correct answer per the OSV spec. Also check read_evidence for path traversal via cve_id and whether evidence can override the KEV decision in an unintended direction (e.g. a stale or expired evidence file, or a missing file treated as exploited/not-exploited). For each confirmed wrong result, do the counterevidence pass and file with create_vulnerability_report including code_locations with fix_before/fix_after verified in the copy. Note: a mismatch that only affects an edge case no real feed produces should be rated low, not high. Record coverage for every function group you assess, including clean ones. Load skill business_logic first.",
+        "is_root": false
+      },
+      {
+        "agent_id": "bfa842cc",
+        "agent_name": "Output and Run Record Agent",
+        "status": "completed",
+        "skills": [
+          "information_disclosure",
+          "path_traversal_lfi_rfi"
+        ],
+        "task": "Validate output rendering and run-record handling in /workspace/cra-scan: src/news_watcher.py (printable, _short_text, slim_osv_record, slim_kev, save_run, run_is_complete, load_runs, status_summary, status_report, _as_dict), src/cli.py (_describe, _status, _run, _save_failed_run, main), and the run record file layout under --runs. First call get_threat_model on /workspace/cra-scan and follow it. Work on a COPY at /workspace/poc-output/ and run the CLI there with --cache and --runs in the copy. Test: (1) terminal-escape / control-character injection: can feed-derived or SBOM-derived strings (summary, details, aliases, component names) carry ANSI/OSC sequences, carriage returns or bidi characters through printable() into `status` or `run` output and actually alter what the operator sees (e.g. hide a line, fake a 'not affected' verdict)? Demonstrate with raw bytes in the output; (2) information disclosure: do run records or status output leak absolute paths, the cache layout, or raw error text that should not be printed; (3) run-record tampering: a crafted run JSON file placed in --runs (glob pattern *.json, MAX_RUN_FILES cap) that makes status report a complete or healthy run when it is not; check run_is_complete and load_runs for trust of attacker-editable records; (4) failed-run record path handling in _save_failed_run. Run the existing pytest suite in the copy as a baseline. Severity: terminal-escape injection that can fake a verdict is medium at most unless it is shown to affect an automated consumer. For each confirmed issue, do the counterevidence pass and file with create_vulnerability_report, with code_locations and fix_before/fix_after verified in the copy. Record coverage for every surface you assess, including clean ones. Load skill information_disclosure first.",
+        "is_root": false
+      },
+      {
+        "agent_id": "e06c38ec",
+        "agent_name": "Root Agent",
+        "status": "running",
+        "skills": [],
+        "task": "\n\nLocal Codebases: - /tmp/cra-scan (available at: /workspace/cra-scan; this is the user's real directory, mounted live and writable — .git/.agents/.codex are read-only)",
+        "is_root": true
+      },
+      {
+        "agent_id": "9c17bc7b",
+        "agent_name": "SBOM Input Validation Agent",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "insecure_deserialization"
+        ],
+        "task": "Validate attacker-controlled SBOM and product-config input handling in /workspace/cra-scan (src/sbom_reader.py, src/cli.py check/run paths). First call get_threat_model on /workspace/cra-scan and follow it; the SBOM is the main attacker-reachable input. Work on a COPY, not the user's repo: copy /workspace/cra-scan to /workspace/poc-sbom/ and run the CLI there with --cache and --runs pointed at /workspace/poc-sbom/scratch. Test crafted CycloneDX SBOMs and configs for: (1) parser resource exhaustion bypassing _check_depth, _read_limited, and size caps (deep nesting, huge arrays, huge strings, many components); (2) duplicate-key, NaN/Infinity, and type-confusion inputs that crash the tool with an unhandled exception (record as low/medium only if the crash is attacker-triggerable and has a real effect); (3) purl/name/version confusion that makes a component match or miss a vulnerability incorrectly (coordinate with matcher; hand off pure matcher logic findings to the Matcher agent via record_coverage needs_follow_up); (4) control characters and terminal escape sequences in component names that reach CLI output (check _clean and _describe); (5) symlink or path tricks in --sbom, --config, and --evidence reads. Use the existing pytest suite as a baseline (python3 -m pytest -q in the copy). For each confirmed issue, do the counterevidence pass and file with create_vulnerability_report including code_locations with fix_before/fix_after verified in the copy. Record coverage for every surface you assess (including clean ones). Load skill business_logic and insecure_deserialization first.",
+        "is_root": false
+      },
+      {
+        "agent_id": "11d65f62",
+        "agent_name": "Static Triage Agent",
+        "status": "completed",
+        "skills": [
+          "source_aware_sast",
+          "dependency_cve_scanning"
+        ],
+        "task": "Run the source-aware static triage baseline on /workspace/cra-scan (read-only analysis of the repo; write artifacts only under /workspace/.source-aware-cra/). First call get_threat_model on /workspace/cra-scan and follow its trust boundaries. Run: one semgrep pass (--metrics=off, p/default, p/python, p/secrets), one secrets pass (gitleaks detect and trufflehog filesystem, --no-verification), one trivy fs pass (vuln,misconfig), and one AST structural pass (sg run over the semgrep-scanned paths for src/ only). Then triage the findings against the actual code in src/ (cli.py, sbom_reader.py, news_watcher.py, matcher.py, safe_paths.py). Dismiss tooling noise in tests/ and docs. Also check requirements.txt / requirements-dev.txt for known CVEs in packageurl-python==0.17.6 and packaging==26.3 (use web_search to verify any CVE ID before reporting; file with create_dependency_report only if an advisory actually covers the pinned version). For every static candidate that survives triage, do NOT file a dynamic report; instead send the candidate (file:line, sink, input source, why it may be exploitable) in your agent_finish summary and record it with record_coverage as needs_follow_up so the validation agents can pick it up. Record coverage for each tool pass (semgrep, secrets, trivy, sg). Load skill source_aware_sast and dependency_cve_scanning first.",
+        "is_root": false
+      }
+    ],
+    "skills_exercised": [
+      "business_logic",
+      "dependency_cve_scanning",
+      "information_disclosure",
+      "insecure_deserialization",
+      "path_traversal_lfi_rfi",
+      "source_aware_sast",
+      "ssrf"
+    ],
+    "findings_filed": 11,
+    "source": "runtime"
+  },
+  "completeness": {
+    "complete": false,
+    "scan_status": "completed",
+    "exit_reason": "finished_by_tool",
+    "caveats": [
+      "1 agent(s) did not finish cleanly (Root Agent); any surface they held is under-covered."
+    ]
+  },
+  "entries": [
+    {
+      "surface": "src/ via semgrep (p/default, p/python, p/secrets; --metrics=off; 360 rules, 21 files)",
+      "risk_area": "SAST static triage pass",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Artifact /workspace/.source-aware-cra/semgrep.json. Zero results in src/ (cli.py, sbom_reader.py, news_watcher.py, matcher.py, safe_paths.py, __main__.py). Only 2 WARNING hits, both in .github/workflows/gitleaks.yml lines 16 and 20 (mutable action tag), which is CI tooling outside product runtime. Semgrep did not flag any eval/subprocess/yaml/pickle sink; manual source read of all src/ files followed for triage.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:36 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": ".github/workflows/gitleaks.yml (semgrep mutable-action-tag hits, lines 16 and 20)",
+      "risk_area": "CI supply-chain hygiene (developer tooling)",
+      "outcome": "not_applicable",
+      "outcome_label": "Not applicable",
+      "evidence": "CI workflow is developer-controlled tooling, not product runtime per the threat model. Mutable action tag is a supply-chain hygiene note only; no effect on the shipped CLI. Not filed.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:38 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "whole repo: gitleaks (no-git, working tree) and trufflehog filesystem (--no-verification)",
+      "risk_area": "hardcoded secrets / credentials",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Artifacts gitleaks.json (no leaks found) and trufflehog.json (2 hits, both in test data, not product code): (1) URI detector, tests/fixtures/osv/GHSA-j8r2-6x86-q33q.json:1, value https://username:********@proxy:8080, a placeholder; (2) CloudflareApiToken detector, tests/fixtures/kev.json:11803, a long alphanumeric run inside the notes text of a real CISA KEV entry, not a credential. Neither is in src/ or runtime config. Unverified trufflehog hits, so no live validation was attempted.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:41 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "requirements.txt (packageurl-python==0.17.6, packaging==26.3) via trivy fs --scanners vuln,misconfig",
+      "risk_area": "known-CVE dependency (SCA) and IaC misconfiguration",
+      "outcome": "needs_follow_up",
+      "outcome_label": "Requires further review",
+      "evidence": "Trivy 0.73.0 with the vulnerability DB updated 2026-10-25 parsed both pins (listed via --list-all-pkgs) and returned 0 vulnerabilities and 0 misconfigurations (artifacts trivy-fs.json, trivy-sca.json). Open gap: web_search is not configured in this scan (no EXA/PERPLEXITY key), so no advisory could be independently confirmed or CVE IDs verified. No CVE was reported. requirements-dev.txt (pytest==9.1.1, bandit==1.9.4) was not listed by trivy; dev-only, not shipped. A human or a session with web access should check GHSA/OSV for both pins before closing.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:44 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "src/ via ast-grep (sg run '$F($$$ARGS)' over semgrep-scanned src/ files, 7 files, 727 call matches)",
+      "risk_area": "AST structural mapping of sinks (eval/exec, subprocess, file open, json/yaml load, path join, regex)",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Artifact ast-grep.json (727 matches). Grouped by callee: no subprocess, eval, exec, pickle, yaml, or shell calls in src/. File-open sinks are limited to _read_limited, _read_json, read_evidence, and _write_json_atomic, each covered by the separate closures below. json.loads sites are wrapped in size, depth, duplicate-key, and NaN checks (sbom_reader._load_json, read_product_config, news_watcher._json_loads). Candidates from this pass are recorded individually below.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:46 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._vuln_cache_path / fetch_osv cache write (OSV vulnerability id -> file name)",
+      "risk_area": "path traversal via feed-supplied id (cache write outside cache folder)",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: VULN_ID_PATTERN (src/news_watcher.py:~line 49, fullmatch, no \"..\" and no \"/\" or \"\\\\\") applied both in _parse_batch_result (fresh OSV ids) and in _vuln_cache_path (cached ids), and safe_join (src/safe_paths.py:~line 14-25, SAFE_NAME fullmatch, resolved parent must equal base) on the final file name. Ids that fail validation raise FetchError or ValueError before any path is built. Sibling sink _purl_cache_path uses a sha256 hex name. Fetch URL OSV_VULN_URL + id cannot change host or path because \"/\" and \"?\" are excluded by VULN_ID_PATTERN.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:49 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.read_evidence / invalid_evidence_cves (CVE id -> evidence/<CVE>.json)",
+      "risk_area": "path traversal via CVE alias from feed/SBOM",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "cve_ids_of (src/matcher.py) normalizes and keeps only values that pass CVE_PATTERN.fullmatch (CVE-YYYY-NNNN+ digits only) from id, aliases, and upstream. read_evidence re-checks CVE_PATTERN.fullmatch at its entry and builds the path with safe_join (src/safe_paths.py). Feed-controlled text cannot add \"/\" or \"..\". Evidence folder is operator-supplied.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:51 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "terminal output of SBOM/feed strings (cli._check_sbom, cli._describe, cli._run, news_watcher.status_summary)",
+      "risk_area": "terminal escape / log injection from crafted SBOM or feed text",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Every SBOM string that reaches print() passes sbom_reader._clean with an ASCII-only fullmatch (NAME_PATTERN, VERSION_PATTERN, PURL_PATTERN in src/sbom_reader.py:~lines 30-37), so ESC and other control characters are rejected and the component is marked UNKNOWN with a fixed reason. Config strings use PRODUCT_NAME_PATTERN (no control characters). OSV ids and CVE ids are fullmatched by VULN_ID_PATTERN and CVE_PATTERN before printing. Run-file strings in status output go through news_watcher.printable. Unknown-ecosystem reason text uses the packageurl type, which is limited by PURL_PATTERN.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:54 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "sbom_reader._load_json / _check_depth / read_product_config (SBOM and config parser)",
+      "risk_area": "parser DoS (deep nesting, large file, duplicate keys, NaN) and unhandled exception",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Controls on every path before json.loads: _read_limited caps read at MAX_FILE_BYTES+1 (10 MiB, config 64 KiB); _check_depth rejects nesting deeper than 32 (brackets inside strings ignored, escapes handled); json.loads uses _reject_duplicate_keys and _reject_constant; RecursionError and ValueError are converted to SbomError or ConfigError. Components are capped at 5000 and nested walk is iterative (deque). Residual cost: _check_depth is a per-character Python loop over at most 10 MiB, a few seconds at most, which is not a meaningful DoS.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:56 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch and fetch paths (KEV_URL, OSV_BATCH_URL, OSV_VULN_URL + id)",
+      "risk_area": "SSRF / redirect-based request steering / TLS downgrade",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Destinations are fixed module constants; the only interpolated part is the OSV vuln id, which VULN_ID_PATTERN restricts to alphanumerics, dot, underscore, and hyphen (no \"/\", \"?\", \"#\", \"@\"), so the host and path cannot change. http_fetch (src/news_watcher.py ~line 105-140) enforces scheme https, hostname in ALLOWED_HOSTS, port None or 443, default TLS verification, and _NoRedirects refuses every 3xx. No user-supplied URL exists in the SBOM or config path. Environment proxy variables are honored by urllib default handling, which is operator-controlled.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:32:59 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.match_vulnerability / _intervals (range ordering and version comparison, silent NOT_AFFECTED risk)",
+      "risk_area": "false negative: affected component reported as not affected",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Reopened. The silent-NOT_AFFECTED guard in evaluate still holds (osv_listed=True turns every local NOT_AFFECTED into UNKNOWN), but the range walk in _intervals (matcher.py:112) sorts a start before an end at the same version, so an affected version after a same-version reintroduction is computed as NOT_AFFECTED by match_vulnerability. evaluate then reports UNKNOWN, so a KEV-listed affected component gets URGENT_HUMAN_REVIEW instead of REPORT_CASE. Differential fuzz against a state-machine reference: 1,051 false negatives (PyPI) and 864 (Maven), all same-version ties. Filed as a low-severity report; patch verified in the working copy.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:33:02 UTC",
+      "updated_at": "2026-10-25 15:41:12 UTC",
+      "previous_outcomes": [
+        "ruled_out"
+      ],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.evaluate withdrawn-advisory skip and KEV alias linkage (record.withdrawn, cve_ids_of aliases)",
+      "risk_area": "feed-driven suppression of a real exploited finding",
+      "outcome": "not_applicable",
+      "outcome_label": "Not applicable",
+      "evidence": "Both levers (withdrawn flag, alias/CVE linkage) come from OSV records. The SBOM cannot set them, and the feed is fetched over TLS from allow-listed hosts with redirects refused (news_watcher.http_fetch), so the attacker must already compromise the feed, which is outside this threat model. Withdrawn skips are counted and printed (\"Ignored withdrawn advisories\"), so they are visible. Alias-only KEV misses are a data-coverage limitation (KEV CVE id absent from OSV aliases), not an attacker-reachable bug.",
+      "recorded_by": "Static Triage Agent",
+      "recorded_at": "2026-10-25 15:33:07 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.evaluate per-component loop with _check_entry_pypi/_intervals re-parsing (src/matcher.py, evaluate and _check_entry_pypi; sbom_reader.load_sbom MAX_COMPONENTS=5000 counts duplicate purls)",
+      "risk_area": "resource exhaustion (CPU and output amplification) from one crafted SBOM with duplicate components",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Output amplification from duplicate components confirmed: 1000 identical pypi django 1.0.1 components plus one log4j-core entry produced 88007 findings and a 50.5 MB run file in a live run (OSV queried once for the duplicate purl). The output-size consequence is reported as vuln-0013, because the 20 MB read cap in status then hides the latest run. CPU time for the matcher loop was not separately measured.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:34:10 UTC",
+      "updated_at": "2026-10-25 15:47:13 UTC",
+      "previous_outcomes": [
+        "needs_follow_up"
+      ],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "status output: run-file strings (printable) - src/news_watcher.py status_summary and printable()",
+      "risk_area": "Terminal escape / control-character injection into status output",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Planted run file with ESC, OSC, CR, bidi (U+202E), U+2028, NEL, ZWSP, BOM in source keys, status, detail and finished_at: every control/format char is replaced with '?' by printable() (news_watcher.py printable, applied at status_summary lines ~666-670 and the finished_at lines). Raw-byte check of the output found no 0x1b, 0x07, 0x0d, U+202E, U+0085, U+2028 bytes (work/exp3.out). Hostile text cannot hide a line or fake an 'all clear' from this path; only visible ASCII/printable text remains.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:07 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "run/check-sbom output: SBOM-derived name, version, purl, group (src/sbom_reader.py _clean/_read_component; cli.py _describe, _check_sbom)",
+      "risk_area": "Terminal escape / control-character and bidi injection from SBOM strings",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "The control is the strict ASCII allow-list in sbom_reader.py (NAME_PATTERN, VERSION_PATTERN, PURL_PATTERN, GROUP via _clean, fullmatch after strip(\" \") only). A component with ESC/CR/bidi in name, version, purl or group becomes UNKNOWN with name/version/purl dropped to None ('(unnamed)', '?'), and check-sbom/run output contains no control bytes (work/exp1.out). _describe and _check_sbom print these fields without printable(), so this pattern check is the only control on that path; it is currently sufficient (gap noted: defense-in-depth only, not exploitable today).",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:10 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "OSV feed text into run/status output: slim_osv_record (summary, details, aliases, upstream, modified) and _parse_batch_result (news_watcher.py)",
+      "risk_area": "Terminal escape / feed-derived text reaching the operator",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "slim_osv_record keeps only id, modified (<=64 chars), aliases/upstream filtered by VULN_ID_PATTERN fullmatch, and affected/ranges/versions; summary and details are dropped entirely. A hostile OSV record with ESC/CR/bidi in summary, details, aliases and upstream produced a clean run output and a cache file with no summary/details and no ESC bytes (work/exp2.out). Feed ids that are not VULN_ID_PATTERN are rejected in _parse_batch_result (FetchError -> fixed text). Nothing feed-derived free text is printed.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:13 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "KEV feed and evidence-file strings printed by _describe/run (slim_kev, validate_kev, cli.py _describe, matcher.read_evidence)",
+      "risk_area": "Terminal escape / output injection from KEV and evidence values",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "KEV: slim_kev keeps only cveID (CVE_PATTERN fullmatch), dateAdded (date.fromisoformat) and a 40-char catalogVersion that is stored but never printed. Evidence: read_evidence requires source_url matching EVIDENCE_URL (ASCII, no whitespace or control chars, https only) and date matching DATE_PATTERN; _describe prints only these validated values. Operator-curated, and the printed fields cannot contain control characters.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:15 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "status_summary robustness: run-file field shapes and timezone edge cases (news_watcher.py status_summary, load_runs, _as_dict)",
+      "risk_area": "Unhandled exception / traceback from hostile run JSON (info disclosure via traceback, status crash)",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Fuzzed 189 run-file shapes (wrong types for every top-level and nested field, extreme/odd timezones like +23:59, year 0001/9999, 5000-digit ints, lone surrogate, control chars) through status_summary: 0 uncaught exceptions. Oversized ints are rejected at json parse and the file is skipped.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:17 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "run-file trust: run_is_complete and status_summary health decision for a planted file in --runs",
+      "risk_area": "Run-record tampering / false healthy status",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Reported as a Low finding: one planted run file with a newer finished_at and self-declared healthy flags makes status print 'Latest run: all sources ok.' and exit 0, hiding a genuine REPORT CASE run (poc/poc_planted_run_status.py). Requires write access to the runs folder; PLAN.md (b) and PROGRESS.md accept this as a known limit.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:20 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "load_runs MAX_RUN_FILES cap and per-file read (news_watcher.py load_runs, _read_json)",
+      "risk_area": "Resource exhaustion from planted run files",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Reported as Low: load_runs reads up to MAX_RUN_FILES (1000) files of up to 20 MB each and keeps every parsed record in memory, though status uses only the last and last-good runs. Measured 40 planted 19 MB files -> 821 MB peak RSS, 2.7 s (poc/poc_planted_run_memory.py). The 1000-file ceiling implies about 20 GB; that figure is extrapolated, not tested. Requires write access to runs/. Real run records are about 13 KB.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:22 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "_save_failed_run and save_run (cli.py _save_failed_run; news_watcher.py save_run, _write_json_atomic) - path handling and error text",
+      "risk_area": "Failed-run record path handling, error-text persistence, file-name control",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "File name is built only from now() (save_run), never from input, so no traversal. A forced RuntimeError containing a path and a token produced a record with only error='RuntimeError' (work/exp6): no message text persisted or printed. Cache-as-file gives failed record with NotADirectoryError name (exp5a). Unwritable runs path prints 'could NOT be saved' (exp5b). Existing directory at stamp name -> suffix -0002 (exp5c). Temp file via mkstemp in the same folder and os.replace is atomic. Minor, not reported: two runs in the same second can race between path.exists() and os.replace, so one run record can be overwritten (sub-second window, same data).",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:25 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Uncaught tracebacks and raw error text from SBOM and config parsing (sbom_reader.load_sbom, read_product_config; cli._check_sbom, _run REJECTED paths)",
+      "risk_area": "Information disclosure via traceback or raw exception text; uncaught exception bypassing _save_failed_run",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Fuzzed about 7,000 purl/name/version combinations that pass PURL_PATTERN through load_sbom: 0 exceptions other than SbomError. Config fuzz (product_name/manufacturer/member_states shapes, duplicate keys, NaN, deep nesting): 0 uncaught. REJECTED messages contain only parser text or OS error text for the operator-typed path. _run catches ConfigError/SbomError before any run record, and only class names are printed for runtime errors.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:28 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Information disclosure in run/status output and run records: absolute folder paths, cache layout, product and SBOM fingerprint (cli._run Folders/Run saved lines; run record 'folders', 'sbom_sha256', 'product')",
+      "risk_area": "Information disclosure (paths, cache layout, identifiers)",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "status output contains no paths and no cache layout. run prints cache/runs/evidence paths and 'Run saved:' path, which are the operator's own inputs to their own terminal. Run record stores absolute folder paths (folders.cache/runs/evidence) and the product config with the SBOM sha256. This is local, operator-owned data; it is not sent, and it contains no secret or credential. Low sensitivity: a copy of a run record shared outside the team would reveal the local folder layout and user name in the path. Not reported as a finding.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:31 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Failed-run and CLI argument paths: --cache/--runs/--evidence folder handling in cli.main and _run (symlink/redirect and cache layout)",
+      "risk_area": "Path handling of operator-supplied folders and cache layout",
+      "outcome": "not_applicable",
+      "outcome_label": "Not applicable",
+      "evidence": "Folders are operator command-line inputs (threat model: operator-controlled). Cache file names are constrained by safe_join and VULN_ID_PATTERN (covered by the cache/matcher agents). Nothing attacker-controlled reaches these paths, so this is out of the output/run-record attacker model.",
+      "recorded_by": "Output and Run Record Agent",
+      "recorded_at": "2026-10-25 15:35:33 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "src/sbom_reader.py _read_component (Maven purl namespace/group/name identity) and cli.run path",
+      "risk_area": "purl/name/version confusion causing a component to match or miss a vulnerability",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Reported as vuln-0004 (Medium, CVSS 6.5). Slash-separated or upper-case Maven purls pass the reader as OK; live OSV returns no advisories for them; run reports zero findings, complete, exit 0 for KEV-listed log4j-core 2.14.1, while the canonical purl gives REPORT CASE exit 3. Patch verified in a working copy (slash rejected, upper-case fail-closed); 412 tests pass.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:40:53 UTC",
+      "updated_at": "2026-10-25 15:47:06 UTC",
+      "previous_outcomes": [
+        "reported"
+      ],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher._check_entry / _check_entry_maven / _check_entry_pypi (AFFECTED decision, exact version lists, unknown fallbacks)",
+      "risk_area": "unaffected component reported AFFECTED (false positive) and unknown answers turned into NOT_AFFECTED",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Differential fuzz of match_vulnerability over about 113k ECOSYSTEM range/version comparisons (PyPI with packaging, Maven with pre-release limits) against an independent state-machine reference: 0 false positives. Maven exact-list match is raw-string equality (so \"2.0.0\" vs listed \"2.0\" yields UNKNOWN, not NOT_AFFECTED; conservative). Unreadable limits, non-plain Maven versions and unreadable PyPI versions all return UNKNOWN (matcher.py:165-179, 185-187). Under evaluate() the osv_listed guard prevents NOT_AFFECTED output. Existing 100 matcher tests pass, and the patched copy passes the full suite (408 passed, 2 skipped).",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:15 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher._in_intervals / _usable_ranges / _unsupported_range_types (GIT, SEMVER and mixed ranges)",
+      "risk_area": "range type not evaluated but reported as NOT_AFFECTED",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: match_vulnerability (matcher.py:243-251) checks every matching entry for AFFECTED first, then UNKNOWN, and only then checks _unsupported_range_types. Any GIT or non-ECOSYSTEM range on a matching entry therefore converts a NOT_AFFECTED result to UNKNOWN (git_range_not_supported or range_type_not_supported), and a version-list-only entry is still gated by the same check. Verified with a SEMVER range next to a good range (UNKNOWN) and the GIT+ECOSYSTEM fixture PYSEC-2023-74 (UNKNOWN for 2.31.0, AFFECTED for 2.30.0).",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:19 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.maven_version_key / maven_limit_key / _numbers (Maven numeric comparison and pre-release limits)",
+      "risk_area": "wrong version ordering (text comparison, trailing zeros, pre-release, oversized numbers)",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Versions are never compared as text: PLAIN_VERSION fullmatch (matcher.py:63) then integer tuples. Trailing zeros are stripped (2.0 == 2.0.0, checked). Pre-release limits (2.0-beta9, -rc, -alpha, -m) map to just below the release, and this stays correct for plain components because plain versions never fall between them. Numbers longer than 9 digits and any qualifier outside the pattern return None, which becomes UNKNOWN. Maven differential fuzz with pre-release limits: 0 false positives and 0 false negatives after the same-version ordering fix (about 78k comparisons).",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:21 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher._pypi_version / normalize_pypi_name (PyPI version parsing and PEP 503 names)",
+      "risk_area": "PyPI version or name mismatch causing wrong affected/not-affected result",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Versions use packaging.Version (PEP 440 ordering, pre/dev/post). Names apply PEP 503 (-, _, . collapse, lowercase) to both the SBOM purl and the OSV package name (matcher.py:46-48, 218). Fuzz over PyPI ranges shows 0 false positives. Known deviation, deliberate and tested: a local build (1.0+abc) is read as release 1.0 (matcher.py:86). This is conservative for fixed boundaries but can include a local build of last_affected (1.0+abc counted as affected); no real feed sample exercised it, so it is noted, not reported.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:24 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher._package_identity / _entry_matches (purl type, namespace, qualifiers, name matching)",
+      "risk_area": "purl namespace or type confusion matching the wrong package or version",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls upstream of every CLI path: sbom_reader.py:133-156 rejects purl qualifiers outside its allow-list, rejects a PyPI purl with a namespace, rejects a Maven purl with no namespace, rejects a purl whose namespace/name/version disagree with the SBOM fields, and rebuilds a canonical purl. Only OK components reach the matcher. Inside the matcher, Maven requires group and artifact (exact match on group:artifact), PyPI names are normalized, and ecosystem strings must equal Maven or PyPI exactly. Probed: pkg:maven/log4j-core@2.14.1 is rejected as unsupported; unknown types are UNKNOWN.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:27 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.exploited_status / cve_ids_of (KEV match through alias and upstream CVE links)",
+      "risk_area": "KEV attribution through a related CVE link that is not the same vulnerability",
+      "outcome": "needs_follow_up",
+      "outcome_label": "Requires further review",
+      "evidence": "cve_ids_of accepts CVE ids from id, aliases and upstream (matcher.py:260-270), so an advisory whose upstream field names a KEV-listed CVE is marked exploited (matched_on reports \"upstream\"). Not confirmed as wrong: the reading of OSV upstream as the same vulnerability is a data-model judgment, and no saved OSV fixture has a populated upstream field, so the frequency with which upstream names a different CVE could not be tested offline. Matched_on is exposed in the finding so a reviewer can see the link source.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:30 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.exploited_status / read_evidence / invalid_evidence_cves (evidence override direction, missing, stale, future-dated files)",
+      "risk_area": "evidence file forces exploited=True or suppresses it, or a missing or broken file is treated as known not-exploited",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: exploited_status checks KEV first and only then evidence, and evidence can only set exploited=True (matcher.py:329-333); there is no path where evidence clears a KEV hit. A missing file returns None (matcher.py:282-283) and leaves exploited False with exploited_known taken from KEV freshness, so a failed KEV download still gives URGENT (test_failed_kev_download_never_turns_into_not_exploited). Broken JSON, non-https link, missing date, future date and non-ISO date return None and are flagged via invalid_evidence_cves (matcher.py:411, 416) which forces exploited_known False. Evidence has no expiry by design (dated, operator-curated); a stale file keeps its exploited flag, which is a policy choice rather than a matcher error.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:33 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.evaluate exploited_known for component with no OSV answer or no details (osv_gave_no_answer, osv_details_missing, record_malformed)",
+      "risk_area": "unchecked exploitation status reported as known not-exploited",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Confirmed: with KEV status ok, these findings carry exploited False and exploited_known True and get HUMAN_REVIEW, while the KEV-failed path for the same state gives URGENT_HUMAN_REVIEW. The KEV list was never checked against any CVE of that component. Filed as low. The patched copy sets exploited_known False on these three paths; full test suite passes.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:36 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.evaluate component_unknown path (components without purl, status not OK)",
+      "risk_area": "unchecked exploitation status reported as known not-exploited for components that cannot be looked up",
+      "outcome": "needs_follow_up",
+      "outcome_label": "Requires further review",
+      "evidence": "Same invariant as the reported row: the code passes exploited_known=kev_ok, so a no-purl component with a fresh KEV list shows exploited_known True and HUMAN_REVIEW. Not filed because the fix changes the urgency of every component without a purl (for example demo smartheat-firmware-core moves from HUMAN_REVIEW to URGENT_HUMAN_REVIEW). That is a product policy decision for the maintainers, not a clear logic error.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:38 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher.action_for and summarize_packages (action table, per-package summary)",
+      "risk_area": "wrong next-step action for a status and exploitation combination; package summary hiding an affected version",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "action_for matches the table in PLAN.md Part 3 and CLAUDE rules for all status x exploited x known combinations (AFFECTED+KEV=REPORT_CASE, UNKNOWN+exploited=URGENT, AFFECTED not known=URGENT). summarize_packages is max-over-versions by documented design (cli prints the legend), so one AFFECTED version marks the package AFFECTED; it never downgrades. Demo run on demo-data fixtures gave AFFECTED for log4j-core and requests as expected.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:40 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "matcher._intervals ECOSYSTEM 'limit' events (and unknown event kinds)",
+      "risk_area": "range upper bound silently dropped, widening the affected range to unbounded",
+      "outcome": "needs_follow_up",
+      "outcome_label": "Requires further review",
+      "evidence": "Observed: an ECOSYSTEM range [introduced 0, limit 2.0] makes 3.0 AFFECTED because the limit event is silently ignored (not counted as an end, and not treated as unreadable). Not confirmed as a wrong result: whether OSV intends limit as an affected bound or only a search bound for ECOSYSTEM ranges could not be checked offline (no OSV schema copy in the sandbox, web search unavailable), and no saved feed uses limit. If real ECOSYSTEM data can carry it, unknown events should make the range UNKNOWN rather than open-ended.",
+      "recorded_by": "Matcher Logic Agent",
+      "recorded_at": "2026-10-25 15:41:43 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch custom redirect handler (_NoRedirects.redirect_request, news_watcher.py:74-76)",
+      "risk_area": "Redirect to non-HTTPS or internal host; redirect following; SSRF via 3xx",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: _NoRedirects.redirect_request raises FetchError for every 301/302/303/307/308, so no redirect is followed (src/news_watcher.py:74-76, installed via build_opener in http_fetch). Dynamic: 302 to http://127.0.0.1:8081 and 302 to https://127.0.0.1/... both returned FetchError status=302 and the internal canary logged 0 hits.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:46:47 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch host, scheme and port allow-list (ALLOWED_HOSTS check)",
+      "risk_area": "Host confusion (userinfo, fragment, backslash, subdomain, IP, uppercase, http scheme, non-443 port)",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: parsed.scheme != \"https\" / parsed.hostname not in ALLOWED_HOSTS / port not in (None, 443) check runs before any socket is opened (news_watcher.py http_fetch). Tested without network for api.osv.dev@evil, api.osv.dev.evil, evil#@api.osv.dev, http://, [::1], 127.0.0.1, //api.osv.dev, api.osv.dev\\@evil: all refused with 'address is not on the allowed list'. Only the uppercase and :443 variants of the real host passed the check (they reached the public API, which returned 405 to a GET).",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:46:50 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch response size cap and Content-Length handling",
+      "risk_area": "Response-size bomb / unbounded memory; truncated or lying Content-Length",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: size counter checked after each chunk against max_bytes (5 MB detail, 10 MB KEV, 20 MB batch) in http_fetch. Dynamic: 30 MB close-delimited body with a 5 MB cap aborted at 'answer is larger than the size cap' in 0.0 s; Content-Length 1000 with 10 bytes sent raised 'answer is shorter than announced (cut off)'. Residual time-based stall is recorded separately under the deadline surface.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:46:53 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch content decoding (Content-Encoding gzip) and decompression bombs",
+      "risk_area": "Decompression bomb / zip bomb via Content-Encoding",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "The code never decodes the body: urllib does not add Accept-Encoding and http_fetch joins raw bytes (news_watcher.py http_fetch). Dynamic: a server sending Content-Encoding: gzip for 200 MB of expanded data returned the raw 915 KB compressed bytes unchanged; the JSON parse then failed as 'not valid JSON'. No expansion occurs, so the size cap applies to the wire bytes only.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:46:56 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "sbom_reader.load_sbom parser limits (_check_depth, _read_limited, duplicate keys, NaN/Infinity, big ints, MAX_COMPONENTS, nested components walk)",
+      "risk_area": "parser resource exhaustion, unhandled exception on crafted SBOM",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Boundary tests: 32 nested levels accepted, 33 rejected, escaped quotes and brackets inside strings handled, nested components chain of 20 rejected by depth; 5001 components rejected and 5000 accepted; duplicate keys, NaN and -Infinity rejected; 5000-digit integer rejected as SbomError (int digit limit). Fuzzed 30000 random component dicts and 3000 mutated SBOM files (junk bytes, NaN tokens, lone surrogates, BOMs, huge numbers): zero exceptions other than SbomError. Adversarial 7 MB file of empty dicts parses in 0.8 s with about 206 MB peak RSS; 5000 components with 1.5 KB text parse in 0.55 s. Caps hold; no bypass found.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:46:57 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch total download deadline and per-read timeout",
+      "risk_area": "Slow-drip stall / resource exhaustion (deadline bypass)",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Filed as vuln-0009. Deadline checked only between blocking reads of 64 KB; unmodified code returned after 160 s with a 120 s cap and did not return within 200 s for a 25-second drip. Fixed in the copy with read1; 8-byte drip now stops at 120.0 s.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:46:59 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "sbom_reader.read_product_config and --config product fields",
+      "risk_area": "config parser crash, oversized or malformed config, field type confusion",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Config fuzzing through read_product_config (same file mutation fuzzer, thousands of variants) found no exception outside ConfigError. Duplicate keys, NaN, deep nesting, non-string member_states entries, duplicate and non-EU states all reject with ConfigError. Size is capped at 64 KB via _read_limited before parsing. Product name and manufacturer pass PRODUCT_NAME_PATTERN (no control characters).",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:47:00 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._json_loads, _read_json, _parse_time (parser limits on feed and cache JSON)",
+      "risk_area": "Deep nesting, oversized integers, invalid UTF-8, NaN; parser crash from feed content",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: _json_loads catches ValueError and RecursionError and raises FetchError (news_watcher.py _json_loads); _read_json catches OSError, ValueError and RecursionError and returns None. Dynamic: 200000-deep nesting, 6000-digit integer and invalid UTF-8 each raised FetchError; the same deep nesting in a cache file returned None. NaN is accepted by json.loads but only ever reaches type-checked fields (count, dates), which reject non-int/non-string values.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:01 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "sbom_reader._read_component purl/name/version identity checks (version field vs purl version, name vs purl name, PyPI normalization)",
+      "risk_area": "purl/name/version confusion making a component match or miss a vulnerability (non-maven)",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Control: _read_component requires parsed.version == version field exactly (sbom_reader.py version mismatch branch) and _same_name for PyPI (PEP 503 normalization) or exact equality for Maven, so name and version fields cannot disagree with the purl identity that the matcher uses. Fuzzed 30000 purl/name/version combinations with 0 exceptions. PyPI spelling variants resolve to the same OSV answer (pkg:pypi/Django, django, django@1.11.0 all returned 49 advisories live), so PyPI case and separator variants cannot hide a component.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:47:03 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._fetch_json retry policy and sleep backoff",
+      "risk_area": "Retry amplification / unbounded retries from feed status codes",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Code review of _fetch_json: retries only on status None, 429 or >=500, with RETRIES=3 and delays 1, 2, 4 s; other 4xx raise at once. Existing tests cover 429 retry and 404 no-retry. Retry count is fixed, so a feed cannot make it unbounded; slow-response time is the separate deadline finding.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:05 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.validate_kev structural checks (types, count, cveID pattern, duplicates, dateAdded, entry shape)",
+      "risk_area": "Malformed or type-confused KEV feed accepted and used",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls in validate_kev: required keys, dateReleased must parse as tz-aware time, vulnerabilities must be a non-empty list of at least MIN_KEV_ENTRIES objects, count must be a non-bool int equal to len, cveID must fullmatch CVE_PATTERN and be unique, dateAdded must be a real date (news_watcher.py validate_kev). Existing tests cover each rejection; a malformed list cannot replace the saved copy because fetch_kev saves only after validate_kev passes. The omission and replay gaps are not in this structural layer and are reported separately (vuln-0007, vuln-0008).",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:09 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "--evidence, --sbom and --config symlink and path handling (safe_join, _read_limited, read_evidence, invalid_evidence_cves)",
+      "risk_area": "symlink or path tricks reading or writing outside intended folders",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Attacker-supplied SBOM and feed content never form a path: purl caches use a SHA-256 name, OSV ids go through VULN_ID_PATTERN and safe_join, CVE evidence names pass CVE_PATTERN and safe_join (safe_paths.py resolves the target and rejects a parent that differs from the folder, so an evidence symlink pointing out of the folder is refused). Live test: evidence/CVE-2021-44228.json symlinked to a file outside the folder gives read_evidence None. --sbom and --config are operator-chosen paths; a symlink there is followed, which is the operator's own choice (not attacker reachable). Observation for the operator, not an attacker path: such a refused evidence file is silently ignored rather than reported as unusable, because invalid_evidence_cves swallows the ValueError from safe_join.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:47:10 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.validate_kev completeness (saved-copy omission and count tolerance)",
+      "risk_area": "Silent omission of exploited CVEs from a substituted KEV list",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Filed as vuln-0007 (Medium, 5.9). The 5% count tolerance accepted removal of the two KEV links for affected log4j-core 2.14.1; padding with invented ids also passed. End-to-end: REPORT CASE (exit 3) became RECORD (exit 1) with run complete=True. Patched in the copy with a saved-id superset check; the residual replay with an advanced date is in the same report.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:12 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.validate_kev dateReleased checks (future date and replay against saved copy)",
+      "risk_area": "Future-dated or replayed KEV response freezing or rolling back the saved copy",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Filed as vuln-0008 (Low, 3.7): no upper bound on dateReleased, so a future-dated response replaced the saved copy and froze later genuine downloads as 'possible replay'. The older-date replay check itself works (rejects older dates). The advanced-date replay of the old list is recorded under vuln-0007.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:16 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "SBOM version strings through matcher range checks (PEP 440 local labels, Maven leading zeros, pre-release limits) - handoff to Matcher Logic Agent",
+      "risk_area": "version confusion that makes a component match or miss a vulnerability (matcher logic)",
+      "outcome": "needs_follow_up",
+      "outcome_label": "Requires further review",
+      "evidence": "Handoff to Matcher Logic Agent. _pypi_version (src/matcher.py) strips the PEP 440 local label, so pkg:pypi/x@2.19.0+anything is evaluated as 2.19.0. Under strict PEP 440 this over-reports (2.19.0+local is greater than 2.19.0 and can be unaffected), so it is not a silent miss in the observed direction; the matcher owner should decide whether it is intended. Maven 2.014.1 normalizes to 2.14.1 numerically; OSV also lists both spellings, so no miss was observed. Not tested end-to-end against every OSV range shape.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:47:16 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.load_kev_cache and fetch_kev watermark (saved max_count, planted values)",
+      "risk_area": "Planted or damaged saved KEV copy changing the trust baseline",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: load_kev_cache re-validates the saved data and returns (None, None) on failure; fetch_kev ignores a saved max_count that is not a non-bool int in [0, MAX_COUNT_VALUE] (news_watcher.py fetch_kev). A planted saved file is operator-local (the cache folder is operator-controlled per the threat model), so it is not attacker-reachable from the feed. Not exploited from the feed side in any test.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:19 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._vuln_cache_path with crafted OSV ids (NUL, unicode lookalikes, absolute, dot segments, Windows device names, percent-encoding)",
+      "risk_area": "Vulnerability id to file-name traversal or device-name abuse",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: VULN_ID_PATTERN fullmatch (ASCII class, no '..') and safe_join (src/safe_paths.py: SAFE_NAME fullmatch, no '..', no trailing dot, device-name check, resolved parent must equal the base). Dynamic: 33 crafted ids (../, absolute, NUL, \\n, fullwidth dots U+FF0E, U+2025, backslash, %2e%2e, CON/NUL) were all rejected or confined to the cache folder. Only the trailing-dot case escaped as an uncaught error (filed as vuln-0011); no write occurred outside the cache.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:22 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "cli._run SBOM sha256 re-read (Path(args.sbom).read_bytes) after parsing",
+      "risk_area": "unbounded read of attacker-supplied file, TOCTOU",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "The file is the operator-chosen --sbom path, not attacker-chosen content. The parse path already enforces the 10 MB cap through _read_limited before the re-read. Only a file that grows or is swapped between the two reads would differ, which needs local write access to the operator's own file, so no attacker-reachable unbounded read was found.",
+      "recorded_by": "SBOM Input Validation Agent",
+      "recorded_at": "2026-10-25 15:47:24 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "safe_paths.safe_join with pre-existing symlinks in the cache folder",
+      "risk_area": "Symlink in cache folder redirecting a write or read outside the folder",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: safe_join resolves the target and raises 'path leaves its folder' when the resolved parent differs from the base (src/safe_paths.py, target.parent check). Dynamic: a file symlink and a directory symlink named as an OSV cache file were both rejected before any write; the outside directory stayed empty. The symlink precondition requires local write access to the cache folder, which the threat model treats as operator-controlled.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:26 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._purl_cache_path and fetch_osv purl answer cache (cross-entry poisoning via crafted purl)",
+      "risk_area": "Cache poisoning: a crafted purl overwrites or is read as another component's answer",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: cache file name is sha256(purl), so distinct purls map to distinct files; a saved answer is used only when its stored 'purl' equals the requested purl and every id passes VULN_ID_PATTERN (news_watcher.py fetch_osv). SBOM purls are ASCII-only (sbom_reader PURL_PATTERN), so no crafted non-ASCII key reaches the hash. Remote feed input cannot write a cache entry under another purl's name. Precision: a local file copied under another name is rejected by the purl field check unless the operator-local file is also edited to match, which needs write access to the cache folder (operator-controlled per the threat model). Feed-side answer shifting is in the separate needs_follow_up entry.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:29 UTC",
+      "updated_at": "2026-10-25 15:48:08 UTC",
+      "previous_outcomes": [
+        "ruled_out"
+      ],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.fetch_osv vulnerability record cache and detail download (record id vs requested id)",
+      "risk_area": "Feed returns a record for one vulnerability id but content for another, or poisons a cache entry under a different id",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: _validate_vuln_record requires record['id'] == requested id before a record is cached or used (news_watcher.py _validate_vuln_record, called for fresh and saved records). Dynamic: a detail response for CVE-2024-0999 served under CVE-2024-0100 was rejected and nothing was written to the cache folder; the vulnerability became 'could not load details' (status failed). Existing test test_osv_record_with_the_wrong_id_is_rejected covers the same path.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:36 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.fetch_osv positional mapping of batch answers to purls (_query_purls zip(order, parsed))",
+      "risk_area": "Answers for one component attributed to another if the feed reorders results",
+      "outcome": "needs_follow_up",
+      "outcome_label": "Requires further review",
+      "evidence": "Batch results are zipped to the request order by position and only the result count is checked (news_watcher.py _query_purls). No independent control binds a result to its query. Exploiting it needs the same on-path feed position as vuln-0007, so it was not reported separately. Not tested end to end; I did not confirm an attributable impact beyond the feed-trust precondition. Open for the parent to decide whether to test or accept as a feed-trust residual.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:41 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._query_purls paging, chunking and detail request caps",
+      "risk_area": "Unbounded paging or request volume from a hostile OSV feed",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Code review: MAX_PAGE_ROUNDS=20 per batch, BATCH_SIZE=500 purls per request, MAX_IDS_PER_PURL=500, MAX_DETAIL_REQUESTS=3000 and per-response size caps bound the request count and memory. A hostile page loop ends with no answer for that chunk (existing test test_osv_page_loop_that_never_ends_gives_no_answer). Time per request is the separate deadline finding (vuln-0009).",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:43 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._parse_batch_result and slim_osv_record (feed-supplied ids, modified, aliases, affected lists)",
+      "risk_area": "Type confusion or crash from malformed OSV batch and record fields",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: _parse_batch_result type-checks result, vulns, items, ids and tokens and raises FetchError (caught by _query_purls); slim_osv_record copies only length-capped strings and filtered alias ids, dropping summary, details and references. Dynamic: a trailing-dot id is the only id class that escaped (vuln-0011). Non-string modified and oversized lists were handled by the existing tests and the type checks.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:46 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher._write_json_atomic and _read_json (temp file handling, concurrent readers during replace)",
+      "risk_area": "Partial or torn cache reads; temp file leftovers; races between reader and writer",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named controls: temp file is created with mkstemp in the target folder and moved with os.replace, which is atomic on the same filesystem; the temp is removed on any exception (news_watcher.py _write_json_atomic). Dynamic: 3 reader threads against 4 writer threads over 240 writes read 267 times with zero reads that saw no valid JSON; no temp files were left in the folder; a failing serialization left no temp file. Killed-process leftovers (.tmp names) are not read by any loader, since loaders match only *.json.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:49 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.save_run run file naming (same-second collision)",
+      "risk_area": "Concurrent runs overwriting each other's run records",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Filed as vuln-0012 (Low, 2.5). Check-then-write naming let 16 same-second saves leave 1 to 2 files. Fixed in the copy with an O_EXCL claim; 16 of 16 kept in every trial. Not attacker-reachable; operator concurrency only.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:51 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.run_is_complete, Feeds.sources_ok and Feeds.complete (completeness aggregation)",
+      "risk_area": "Run marked complete while a source or component was not checked",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "The aggregation is correct: complete requires every source status 'ok', unchecked == 0 and checked > 0, and run_is_complete requires complete is True and every recorded source 'ok'. The false 'complete' in the reported KEV finding comes from the KEV source status (vuln-0007), not from this aggregation. Checked a run with an UNKNOWN component (complete False) and a failed OSV source (complete False) in the reproducer runs.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:53 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "sbom_reader purl to news_watcher purl cache key (lone surrogate and non-ASCII purl)",
+      "risk_area": "Unicode surrogate purl reaches purl.encode('utf-8') and aborts the run",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "Named control: sbom_reader._clean with PURL_PATTERN (ASCII only) rejects a JSON '\\ud800' purl as 'invalid purl' and marks the component UNKNOWN before any feed call (src/sbom_reader.py, PURL_PATTERN and _clean). Dynamic: load_sbom returned the component with status UNKNOWN and reason 'invalid purl'. The UnicodeEncodeError in _purl_cache_path is therefore not reachable from the SBOM.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:47:56 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.fetch_osv trailing-dot vulnerability id (VULN_ID_PATTERN vs safe_join disagreement)",
+      "risk_area": "Feed id that passes parsing but raises an uncaught error in the cache path",
+      "outcome": "reported",
+      "outcome_label": "Finding reported",
+      "evidence": "Filed as vuln-0011 (Low, 3.7). An id ending in '.' passed VULN_ID_PATTERN, then raised an uncaught ValueError in fetch_osv's _vuln_cache_path call; cra run recorded RESULT INCOMPLETE (internal error). Fixed in the copy by tightening the pattern; the run now reports OSV failed with a normal message.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:48:02 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "news_watcher.http_fetch TLS certificate and hostname verification",
+      "risk_area": "TLS verification disabled or downgraded, allowing an unverified on-path response",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Code review: no ssl module use, no custom SSLContext, no CERT_NONE or check_hostname override anywhere under src/, so urllib's default context (certificate and hostname verification on) is used. Dynamic: every test relied on the local server's certificate being trusted through SSL_CERT_FILE, which shows the default trust store is consulted. The on-path attacker in the KEV reports therefore needs a trusted certificate, which is the basis for AC:H.",
+      "recorded_by": "Feed Fetch and Cache Agent",
+      "recorded_at": "2026-10-25 15:48:20 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    }
+  ],
+  "gaps": [
+    {
+      "kind": "needs_follow_up",
+      "surface": "requirements.txt (packageurl-python==0.17.6, packaging==26.3) via trivy fs --scanners vuln,misconfig",
+      "risk_area": "known-CVE dependency (SCA) and IaC misconfiguration",
+      "detail": "Trivy 0.73.0 with the vulnerability DB updated 2026-10-25 parsed both pins (listed via --list-all-pkgs) and returned 0 vulnerabilities and 0 misconfigurations (artifacts trivy-fs.json, trivy-sca.json). Open gap: web_search is not configured in this scan (no EXA/PERPLEXITY key), so no advisory could be independently confirmed or CVE IDs verified. No CVE was reported. requirements-dev.txt (pytest==9.1.1, bandit==1.9.4) was not listed by trivy; dev-only, not shipped. A human or a session with web access should check GHSA/OSV for both pins before closing."
+    },
+    {
+      "kind": "needs_follow_up",
+      "surface": "matcher.exploited_status / cve_ids_of (KEV match through alias and upstream CVE links)",
+      "risk_area": "KEV attribution through a related CVE link that is not the same vulnerability",
+      "detail": "cve_ids_of accepts CVE ids from id, aliases and upstream (matcher.py:260-270), so an advisory whose upstream field names a KEV-listed CVE is marked exploited (matched_on reports \"upstream\"). Not confirmed as wrong: the reading of OSV upstream as the same vulnerability is a data-model judgment, and no saved OSV fixture has a populated upstream field, so the frequency with which upstream names a different CVE could not be tested offline. Matched_on is exposed in the finding so a reviewer can see the link source."
+    },
+    {
+      "kind": "needs_follow_up",
+      "surface": "matcher.evaluate component_unknown path (components without purl, status not OK)",
+      "risk_area": "unchecked exploitation status reported as known not-exploited for components that cannot be looked up",
+      "detail": "Same invariant as the reported row: the code passes exploited_known=kev_ok, so a no-purl component with a fresh KEV list shows exploited_known True and HUMAN_REVIEW. Not filed because the fix changes the urgency of every component without a purl (for example demo smartheat-firmware-core moves from HUMAN_REVIEW to URGENT_HUMAN_REVIEW). That is a product policy decision for the maintainers, not a clear logic error."
+    },
+    {
+      "kind": "needs_follow_up",
+      "surface": "matcher._intervals ECOSYSTEM 'limit' events (and unknown event kinds)",
+      "risk_area": "range upper bound silently dropped, widening the affected range to unbounded",
+      "detail": "Observed: an ECOSYSTEM range [introduced 0, limit 2.0] makes 3.0 AFFECTED because the limit event is silently ignored (not counted as an end, and not treated as unreadable). Not confirmed as a wrong result: whether OSV intends limit as an affected bound or only a search bound for ECOSYSTEM ranges could not be checked offline (no OSV schema copy in the sandbox, web search unavailable), and no saved feed uses limit. If real ECOSYSTEM data can carry it, unknown events should make the range UNKNOWN rather than open-ended."
+    },
+    {
+      "kind": "needs_follow_up",
+      "surface": "SBOM version strings through matcher range checks (PEP 440 local labels, Maven leading zeros, pre-release limits) - handoff to Matcher Logic Agent",
+      "risk_area": "version confusion that makes a component match or miss a vulnerability (matcher logic)",
+      "detail": "Handoff to Matcher Logic Agent. _pypi_version (src/matcher.py) strips the PEP 440 local label, so pkg:pypi/x@2.19.0+anything is evaluated as 2.19.0. Under strict PEP 440 this over-reports (2.19.0+local is greater than 2.19.0 and can be unaffected), so it is not a silent miss in the observed direction; the matcher owner should decide whether it is intended. Maven 2.014.1 normalizes to 2.14.1 numerically; OSV also lists both spellings, so no miss was observed. Not tested end-to-end against every OSV range shape."
+    },
+    {
+      "kind": "needs_follow_up",
+      "surface": "news_watcher.fetch_osv positional mapping of batch answers to purls (_query_purls zip(order, parsed))",
+      "risk_area": "Answers for one component attributed to another if the feed reorders results",
+      "detail": "Batch results are zipped to the request order by position and only the result count is checked (news_watcher.py _query_purls). No independent control binds a result to its query. Exploiting it needs the same on-path feed position as vuln-0007, so it was not reported separately. Not tested end to end; I did not confirm an attributable impact beyond the feed-trust precondition. Open for the parent to decide whether to test or accept as a feed-trust residual."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "business logic",
+      "detail": "Agent(s) Matcher Logic Agent, SBOM Input Validation Agent were assigned the 'business_logic' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "insecure deserialization",
+      "detail": "Agent(s) SBOM Input Validation Agent were assigned the 'insecure_deserialization' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    }
+  ]
+}

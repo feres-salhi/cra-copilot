@@ -1,0 +1,681 @@
+[
+  {
+    "id": "vuln-0001",
+    "title": "Planted run file in the runs folder makes cra status report a healthy latest run",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:35:52 UTC",
+    "description": "A run record placed in the `--runs` folder with a newer `finished_at` and self-declared healthy fields replaces the genuine latest run in `cra status`. The status output then reads \"Latest run: all sources ok.\" and exits 0, hiding a genuine REPORT CASE finding that the real run recorded.",
+    "impact": "The `status` command is the operator's only safety signal between scheduled `cra run` calls. With write access to the runs folder, a single file hides an earlier REPORT CASE warning and makes status exit 0 with a fresh \"last successful run\" time. The integrity of the status verdict depends entirely on the folder contents. Confidentiality and availability are not affected. Integrity impact is limited to the operator-visible status verdict.",
+    "target": "cra CLI (local, src/news_watcher.py status_summary / run_is_complete / load_runs)",
+    "technical_analysis": "`status_summary` takes the latest run as `runs[-1]` after `load_runs` sorts every `*.json` file in the runs folder by its own `finished_at` value. It then decides health from fields the file itself declares: `run_is_complete` checks only `complete is True` and that every entry in `sources` has `status == \"ok\"` (`src/news_watcher.py:585-594`). The other health checks (`report_cases`, `needs_human`, `components.unchecked`, `result.data_gaps`, `sbom_warnings`) are also read straight from the same file. Nothing in the code binds a run record to the process that wrote it. There is no digest, no sequence number, and no cross-check against the genuine run history.\n\n```python title=news_watcher.py startLineNumber=601 endLineNumber=612\ndef load_runs(run_dir):\n    runs = []\n    paths = sorted(Path(run_dir).glob(\"*.json\"))[-MAX_RUN_FILES:]\n    for path in paths:\n        data = _read_json(path)\n        if isinstance(data, dict) and isinstance(data.get(\"finished_at\"), str):\n            runs.append((_parse_time(data[\"finished_at\"]), path.stem, data))\n    ...\n```\n\n```python title=news_watcher.py startLineNumber=658 endLineNumber=659 \n    if run_is_complete(last) and last_time is not None and last_time <= current:\n        lines.append(\"Latest run: all sources ok.\")\n```\n\nThe only protection against a future-dated planted run is `last_time <= current`. A planted file dated slightly before \"now\" passes it. The project records this as an accepted residual risk (PROGRESS.md, \"Cache and run files can be edited by anyone with write access to the project folder\", and PLAN.md section (b)). This report keeps the finding visible because the README warning and status wording are the only mitigation, and status presents the result as a verdict.",
+    "poc_description": "1. In the copy of the project, run a genuine-looking latest run record in a temporary runs folder: `complete` false, `report_cases` 2, `needs_human` true, `finished_at` two hours ago.\n2. Run `python -m src status --runs <folder>`. It reports \"the latest run found 2 REPORT CASE finding(s)\" and exits 1.\n3. Write a second `*.json` file into the same folder with a name in the normal stamp format, `finished_at` one hour ago, `complete` true, `report_cases` 0, `needs_human` false, and healthy `sources`, `components` and `result` values.\n4. Run `python -m src status --runs <folder>` again. The output reads \"Latest run: all sources ok.\" with no REPORT CASE warning, and the exit code is 0.",
+    "poc_script_code": "```\npython3 /workspace/poc-output/poc/poc_planted_run_status.py\n```\n\nScript output (abridged):\n\n```\n== 1. only the genuine run (REPORT CASE, complete False):\nWARNING: the latest run found 2 REPORT CASE finding(s) (affected AND actively exploited). Check the 24-hour deadline.\nexit code: 1\n== 2. after one planted file (2026-10-25T14-34-52Z.json, all flags healthy):\nLast successful run: 2026-10-25T14:34:52+00:00 (1 hours ago)\nLatest run: all sources ok.\nexit code: 0\n```",
+    "remediation_steps": "Treat the status verdict as only as trustworthy as the runs folder, and make that explicit. Two options for the project owner to decide. (a) Add an integrity seal to each run record at save time (a digest of its canonical content, verified in `load_runs`, with unsealed or mismatched files treated as unreadable and surfaced as a warning). This stops accidental and naive edits, not a determined local writer, and needs a decision on key handling. (b) Keep the current design but have `status` print a visible warning when the newest run file is not the newest file written by the tool, and document the limit in the README. Whichever option is chosen, make sure a file that cannot be verified never produces \"Latest run: all sources ok.\".",
+    "evidence": "With the planted file present, `status` prints `Last successful run` with the planted time and `Latest run: all sources ok.`, and no REPORT CASE warning is printed. The exit code changes from 1 to 0. The genuine record that says `report_cases: 2` is still present in the folder but is no longer consulted. Reproduced at `/workspace/poc-output/poc/poc_planted_run_status.py` in the copy.",
+    "assumptions": "Attacker has write access to the `--runs` folder (same account or a shared folder). Attacker knows the record format, which is public in the source. No network access is needed.",
+    "counterevidence": "1. The project explicitly accepts this. PLAN.md section (b) and PROGRESS.md (\"Cache and run files can be edited by anyone with write access to the project folder ... accepted\") say that fingerprints would only guard against mistakes, and the README is to say so. This report therefore reports a known, accepted limitation, not an unknown bug. 2. The attacker needs local write access to the project folder. The same access already allows editing `evidence/` and the cache, so this is not a privilege gain. The attacker is not the SBOM supplier in the threat model. 3. Future-dated files are rejected (`last_time <= current` and the \"dated in the future\" warning), so the attacker must date the file within the window. This does not stop the attack, but it constrains it. 4. The genuine run record is not deleted, so a human who reads the folder can still see it. 5. The status command still prints the \"26-hour\" and reporting-deadline notes. None of these stop a file that declares healthy fields from being trusted. The check that ran was: does the latest record's own flags say complete, and it does.",
+    "confidence": "high",
+    "severity_change_conditions": "Raise to Medium if the runs folder can be written by a different principal than the operator (a shared network folder, a scheduler account, or a sync tool), or if an automated consumer (alerting, dashboard, Power BI from PLAN.md phase 5) treats `status` exit 0 as an all-clear. Lower to Informational if the README warning on accepted local write access is confirmed in the shipped docs.",
+    "fix_effort": "medium",
+    "cvss": 3.3,
+    "cvss_breakdown": {
+      "attack_vector": "L",
+      "attack_complexity": "L",
+      "privileges_required": "L",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "L",
+      "availability": "N"
+    },
+    "endpoint": "cra status --runs &lt;folder&gt;",
+    "method": "LOCAL",
+    "cwe": "CWE-345",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 585,
+        "end_line": 594,
+        "label": "Root control: run_is_complete trusts self-declared complete and sources flags with no cross-check or integrity check"
+      },
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 601,
+        "end_line": 612,
+        "label": "Loader: load_runs trusts every *.json file in the runs folder and sorts by its own finished_at"
+      },
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 658,
+        "end_line": 659,
+        "label": "Sink: status prints the healthy verdict from the file's own flags"
+      }
+    ],
+    "fix_verification": "Informational only. No `fix_after` is provided. The complete fix depends on a product decision that the project has already recorded as an accepted limit (PLAN.md section (b), PROGRESS.md), namely whether to add a seal and how to manage its key, or to add a visible warning. A narrower in-code check (for example, requiring `components` and `result` counts to agree with the flags) would not stop the PoC, because the planted file can declare consistent numbers. Not verified by test run.",
+    "finding_class": "dynamic",
+    "agent_id": "bfa842cc",
+    "agent_name": "Output and Run Record Agent"
+  },
+  {
+    "id": "vuln-0002",
+    "title": "cra status loads every planted run file into memory without a total size budget",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:36:07 UTC",
+    "description": "`cra status` reads up to 1000 `*.json` files from the runs folder, each up to 20 MB, and keeps every parsed record in memory, although only the newest and the newest healthy record are used. A folder holding many large files can exhaust memory and make `status` fail.",
+    "impact": "Denial of service of the `status` command. A local writer to the runs folder can make `status` consume several gigabytes of memory, slow it down, or crash it with a MemoryError. The operator then cannot check the last run. Data is not disclosed and not modified.",
+    "target": "cra CLI (local, src/news_watcher.py load_runs / _read_json)",
+    "technical_analysis": "`load_runs` selects the newest `MAX_RUN_FILES` (1000) paths by name, and for each one calls `_read_json`, which reads up to `MAX_CACHE_FILE_BYTES` (20 MB) and parses the JSON. Every parsed record that has a string `finished_at` is appended to `runs` and kept until the function returns. `status_summary` then uses only `runs[-1]` and the newest record that passes `run_is_complete`. Per-file size is capped, but the total is not, so memory grows with the file count times the per-file cap.\n\n```python title=news_watcher.py startLineNumber=601 endLineNumber=612 \ndef load_runs(run_dir):\n    runs = []\n    paths = sorted(Path(run_dir).glob(\"*.json\"))[-MAX_RUN_FILES:]\n    for path in paths:\n        data = _read_json(path)\n        if isinstance(data, dict) and isinstance(data.get(\"finished_at\"), str):\n            runs.append((_parse_time(data[\"finished_at\"]), path.stem, data))\n    ...\n```\n\n```python title=news_watcher.py startLineNumber=165 endLineNumber=176 \ndef _read_json(path):\n    try:\n        ...\n        with open(path, \"rb\") as handle:\n            raw = handle.read(MAX_CACHE_FILE_BYTES + 1)\n        ...\n        return json.loads(raw.decode(\"utf-8\"))\n```\n\nA genuine run record is about 13 KB in the demo product. The 20 MB file cap is therefore far above what the tool writes, and the total cap is absent.",
+    "poc_description": "1. Create a runs folder with 40 files named like `2026-01-01T00-00-NNZ.json`. Each holds `finished_at` and a padding string of about 19 MB, so each file is under the 20 MB cap.\n2. Run `cra status` on that folder, using the copy's `src` package, and measure the peak resident memory and the time.\n3. The result is about 821 MB peak RSS and 2.7 s for 40 files (about 20 MB of RAM per file). Scaling to the 1000-file ceiling is an extrapolation, not a measurement.",
+    "poc_script_code": "```\npython3 /workspace/poc-output/poc/poc_planted_run_memory.py 40\n```\n\nScript output:\n\n```\nplanted files: 40 x ~19 MB\npeak_rss_MB 821 seconds 2.69\n```",
+    "remediation_steps": "Bound what `status` loads, not only the size of each file. Keep only the newest run and the newest run that passes the completeness check while reading, instead of retaining every record. Add a total byte budget for the run folder. Make a skipped or oversized file visible: if the budget or the count cap drops a newer file, `status` must print a warning and must not report \"Latest run: all sources ok.\", so that a dropped run cannot hide behind an older healthy run. The project owner should decide the budget size and the wording of that warning.",
+    "evidence": "Measured: 40 files of about 19 MB each (760 MB on disk) gave a peak RSS of 821 MB and a run time of 2.69 s in `cra status`. The run still exited normally, because the padded files lack the fields needed for a real run record. The per-record cost is therefore about 20 MB of RAM and about 0.07 s of CPU per file. The extrapolation to 1000 files (about 20 GB RAM) has not been tested.",
+    "assumptions": "Attacker has write access to the runs folder and can write up to 1000 files. Attacker-controlled size of each file is limited only by the 20 MB per-file cap. The host has less free memory than the total of the planted files, which is a realistic laptop or task-scheduler machine.",
+    "counterevidence": "1. Write access to the runs folder is required, and the project records that local writers are out of its threat model (PROGRESS.md, accepted). 2. Each file is capped at 20 MB and the count at 1000, so the worst case is bounded, though large. 3. A genuine run record is about 13 KB, so an honest folder never comes close to the limit. 4. The impact is availability of the `status` command only; `run` does not read the runs folder. 5. The attacker is not the SBOM supplier. The check that ran was: does the loader bound the total bytes it reads or keeps? It does not.",
+    "confidence": "medium",
+    "confidence_rationale": "Memory use per file was measured (821 MB for 40 files). The 1000-file worst case is extrapolated and was not run, so the stated ceiling is unconfirmed. The exact point of failure depends on the host.",
+    "severity_change_conditions": "Raise to Medium if an automated job runs `cra status` on a shared or network folder that other principals can write to, so that a remote writer can crash the scheduler's health check. Lower to Informational if the 20 MB per-file cap is reduced to a value that makes the total bounded.",
+    "fix_effort": "medium",
+    "cvss": 3.3,
+    "cvss_breakdown": {
+      "attack_vector": "L",
+      "attack_complexity": "L",
+      "privileges_required": "L",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "N",
+      "availability": "L"
+    },
+    "endpoint": "cra status --runs &lt;folder&gt;",
+    "method": "LOCAL",
+    "cwe": "CWE-770",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 598,
+        "end_line": 612,
+        "label": "Root control: load_runs retains every parsed run and has only a file-count cap (MAX_RUN_FILES)"
+      },
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 165,
+        "end_line": 176,
+        "label": "Per-file read: _read_json allows up to MAX_CACHE_FILE_BYTES (20 MB) per file with no total budget"
+      }
+    ],
+    "fix_verification": "Informational only. No `fix_after` is provided. A correct fix needs a product decision: the size budget, and whether an over-budget or unreadable newer run must turn the status into a warning. Making the wrong choice would hide the latest run behind an older healthy one, which is the failure this tool exists to prevent. The narrowest code change has not been verified by a test run.",
+    "finding_class": "dynamic",
+    "agent_id": "bfa842cc",
+    "agent_name": "Output and Run Record Agent"
+  },
+  {
+    "id": "vuln-0004",
+    "title": "Slash-separated or upper-case Maven purl is accepted as OK and silently clears an exploited component",
+    "severity": "medium",
+    "timestamp": "2026-10-25 15:42:15 UTC",
+    "description": "A CycloneDX component whose Maven purl uses a slash-separated namespace, such as `pkg:maven/org/apache/logging/log4j/log4j-core@2.14.1`, or an upper-case group or artifact spelling, is accepted as a valid component. OSV does not match these spellings, so `cra run` reports the component as checked with zero findings, a complete result, and exit code 0. The canonical form of the same component is affected by CVE-2021-44228, which is listed in CISA KEV.",
+    "impact": "A supplier-supplied or hand-edited SBOM can make the tool report a vulnerable Maven component as clean. The run record is marked complete, the console prints `No exploited vulnerabilities found in the checked components (all sources ok)`, and `cra status` reports `Latest run: all sources ok.` A KEV-listed affected component is therefore never raised for the 24-hour early-warning decision. The same silence applies to every advisory for that component, not only the exploited one.",
+    "target": "cra CLI (local): src/sbom_reader.py (_read_component) and src/cli.py (run)",
+    "technical_analysis": "The SBOM reader validates each component purl and then rebuilds a canonical purl from its parts. For Maven, the namespace is split on the slash character and every segment is accepted independently, so org/apache/logging/log4j passes as a namespace (sbom_reader.py lines 146 to 149). The group-field check only compares the purl namespace with its dotted form, so a matching group field also passes. The name and group checks use exact comparison, so upper-case spellings pass too. The canonical purl is then sent to OSV unchanged. OSV querybatch is case-sensitive and does not normalize slashes, so it returns no advisories for these spellings. In matcher.evaluate the component therefore has an empty advisory list, produces no finding, and is counted in checked. match_vulnerability only returns UNKNOWN when OSV listed the vulnerability for that purl, so nothing downstream notices the mismatch. feeds.complete is then true, so the run record and cra status both report success. An existing test, test_double_slash_in_a_namespace_is_cleaned_up_not_kept, pins the acceptance of the slash form as OK. Measured against live OSV on the same component: the canonical purl returns 7 advisories, including GHSA-jfh8-c2jp-5v3q (CVE-2021-44228, KEV-listed). The slash-namespace, upper-case group, and upper-case artifact variants each return 0 advisories. Root cause: the reader accepts non-canonical identifiers as equivalent to the canonical component without checking that they are spelled the way the vulnerability database spells them, and an absent advisory answer is treated as a clean result.",
+    "poc_description": "1. Create a product config with a product name, a manufacturer, and one EU member state. 2. Create a CycloneDX SBOM with one component whose purl is pkg:maven/org/apache/logging/log4j/log4j-core@2.14.1 (slash-separated namespace). 3. Run check-sbom on the SBOM; the component is listed as OK. 4. Run run with the SBOM, the config, and empty cache, runs and evidence folders; the console reports zero findings, Components checked: 1, and exit code 0, and the saved run record has complete set to true and no findings. 5. Repeat with the canonical purl pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1; the same run reports a REPORT CASE for CVE-2021-44228 and exits with code 3, which shows the component is affected and KEV-listed. 6. Repeat with pkg:maven/ORG.apache.logging.log4j/log4j-core@2.14.1 (upper-case group); the result matches step 4.",
+    "poc_script_code": "mkdir -p poc && printf '%s' '{\"product_name\":\"Thermostat\",\"manufacturer\":\"Example GmbH\",\"member_states\":[\"DE\"]}' > poc/config.json && printf '%s' '{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"components\":[{\"type\":\"library\",\"group\":\"org.apache.logging.log4j\",\"name\":\"log4j-core\",\"version\":\"2.14.1\",\"purl\":\"pkg:maven/org/apache/logging/log4j/log4j-core@2.14.1\"}],\"dependencies\":[{\"ref\":\"a\"}]}' > poc/sbom_slash.json && printf '%s' '{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"components\":[{\"type\":\"library\",\"group\":\"org.apache.logging.log4j\",\"name\":\"log4j-core\",\"version\":\"2.14.1\",\"purl\":\"pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1\"}],\"dependencies\":[{\"ref\":\"a\"}]}' > poc/sbom_canonical.json && python3 -m src check-sbom poc/sbom_slash.json --config poc/config.json; python3 -m src run --sbom poc/sbom_slash.json --config poc/config.json --cache poc/cache --runs poc/runs --evidence poc/evidence; echo \"exit slash=$?\"; python3 -m src run --sbom poc/sbom_canonical.json --config poc/config.json --cache poc/cache --runs poc/runs --evidence poc/evidence > poc/canonical-out.txt; echo \"exit canonical=$?\"; grep 'REPORT CASE' poc/canonical-out.txt",
+    "remediation_steps": "Reject Maven purl namespaces that contain a slash as non-canonical, since they must use dot-separated group ids. Refuse upper-case Maven group or artifact spellings as UNKNOWN until the tool can confirm the spelling OSV uses, because OSV's Maven matching is case-sensitive. Update the test that currently expects the slash form to be OK so that it expects UNKNOWN, and add regression tests for both forms. This converts the silent clean result for these spellings into UNKNOWN and RESULT INCOMPLETE for human review.",
+    "evidence": "Slash-separated namespace, complete run with zero findings: `Components checked: 1, not checkable (UNKNOWN): 0` then `No exploited vulnerabilities found in the checked components (all sources ok).` and exit code 0. Canonical namespace, same component and same feeds: `[REPORT CASE (affected AND actively exploited - the 24-hour clock may be running)] log4j-core 2.14.1: GHSA-jfh8-c2jp-5v3q (CVE-2021-44228) -> AFFECTED [osv_exact_version_list] - ACTIVELY EXPLOITED per kev (CVE-2021-44228)` and exit code 3. Live OSV querybatch for pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1 returns 7 advisories; the same query with pkg:maven/org/apache/logging/log4j/log4j-core@2.14.1, pkg:maven/ORG.apache.logging.log4j/log4j-core@2.14.1 and pkg:maven/org.apache.logging.log4j/Log4j-Core@2.14.1 returns an empty result each. Run record for the slash form: complete true, report_cases 0, findings empty, packages empty.",
+    "assumptions": "The attacker controls the SBOM content that the operator later runs through cra run, for example a supplier-provided file. The operator runs the tool with live OSV and KEV access, as intended. Exploitation requires a non-canonical Maven spelling, which mainstream SBOM generators do not normally emit.",
+    "counterevidence": "Checked: mainstream generators (CycloneDX Maven plugin, Syft) emit dot-separated canonical namespaces, so the trigger needs a hand-written, edited, or defective SBOM. This lowers likelihood but not the validity of the defect. Checked whether check-sbom or run surfaces anything: check-sbom prints OK and run prints only Components checked: 1, so the operator is not warned. Checked whether the matcher's osv_listed safety rule catches it: it does not, because OSV returned nothing to compare. Checked whether evidence files or KEV alone could raise the finding: no, KEV is keyed on CVE ids that come only from OSV records, and the record is never loaded. Checked whether the run is marked incomplete: it is marked complete. No control in the reader, matcher, or CLI prevents the silent clear for these spellings.",
+    "confidence": "high",
+    "severity_change_conditions": "The tool is a local CLI that reads a supplier-supplied SBOM file, so the attack vector is Local with user interaction required (the operator must run the file). If the SBOM were ingested automatically from a network channel without operator action, the rating would rise to High (7.5); cross-checking component identity against a second source would lower it to Low.",
+    "fix_effort": "low",
+    "cvss": 5.5,
+    "cvss_breakdown": {
+      "attack_vector": "L",
+      "attack_complexity": "L",
+      "privileges_required": "N",
+      "user_interaction": "R",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "H",
+      "availability": "N"
+    },
+    "endpoint": "cra run --sbom",
+    "method": "LOCAL",
+    "cwe": "CWE-1289",
+    "finding_class": "dynamic",
+    "agent_id": "9c17bc7b",
+    "agent_name": "SBOM Input Validation Agent",
+    "update_history": [
+      {
+        "timestamp": "2026-10-25 15:42:40 UTC",
+        "fields": [
+          "poc_script_code"
+        ],
+        "reason": "Replace escaped newline and quote sequences that were stored literally with clean single-line text, so the report reads correctly. No change to the finding, severity, or evidence.",
+        "agent_id": "9c17bc7b",
+        "agent_name": "SBOM Input Validation Agent"
+      },
+      {
+        "timestamp": "2026-10-25 15:42:48 UTC",
+        "fields": [
+          "evidence",
+          "poc_description",
+          "technical_analysis"
+        ],
+        "reason": "Replace escaped newline sequences in the technical analysis, PoC steps and evidence with clean single-line text. No change to the finding, severity, or evidence values.",
+        "agent_id": "9c17bc7b",
+        "agent_name": "SBOM Input Validation Agent"
+      },
+      {
+        "timestamp": "2026-10-25 15:42:59 UTC",
+        "fields": [
+          "code_locations",
+          "fix_verification",
+          "http_exchange_ids"
+        ],
+        "reason": "Attach the code location with the verified fix (patched in a working copy, full test suite run) and the proxy exchanges that prove the live OSV behaviour.",
+        "agent_id": "9c17bc7b",
+        "agent_name": "SBOM Input Validation Agent"
+      },
+      {
+        "timestamp": "2026-10-25 15:48:55 UTC",
+        "fields": [
+          "cvss",
+          "cvss_breakdown",
+          "severity_change_conditions"
+        ],
+        "reason": "Attack vector corrected from Network to Local: the tool is a one-shot local CLI with no network listener, and the attacker's SBOM reaches it only through a file the operator runs (user interaction required). Score moves from 6.5 to 5.5; the finding and the fix are unchanged.",
+        "agent_id": "e06c38ec",
+        "agent_name": "Root Agent",
+        "previous_cvss": 6.5
+      }
+    ],
+    "updated_at": "2026-10-25 15:48:55 UTC",
+    "fix_verification": "Gate 1 security closure: in the patched copy the slash-namespace SBOM now makes run exit 1 with RESULT INCOMPLETE, and check-sbom marks the component UNKNOWN with reason maven purl namespace must use dots, not slashes. The source to sink path is blocked at the reader, so the component never reaches the OSV query as a clean component. Gate 2 bypass review: the upper-case group, upper-case artifact, and double-slash variants are also UNKNOWN; qualifiers still canonicalize to the same namespace; the dot-dot check still applies to the namespace. The remaining gap is that a legitimate mixed-case Maven group id now becomes UNKNOWN instead of being checked; this is an intentional fail-closed trade-off stated in the remediation. Gate 3 preserved behavior: the canonical SBOM still exits 3 and prints the two REPORT CASE lines for CVE-2021-44228 and CVE-2021-45046, and the group field match still works for canonical input. Gate 4 how checked: executed, the live CLI run for slash and canonical forms and python3 -m pytest in the working copy (412 passed, 2 skipped, after updating the one test that pinned the slash form as OK and adding regression tests for slash and upper-case spellings). Not executed: a mutation check that removes the new branch to confirm the new regression tests fail.",
+    "code_locations": [
+      {
+        "file": "src/sbom_reader.py",
+        "start_line": 146,
+        "end_line": 149,
+        "label": "Reject slash-separated Maven namespaces and fail closed on upper-case spellings",
+        "fix_before": "    if ecosystem == \"maven\":\n        segments = parsed.namespace.split(\"/\")\n        if not all(GROUP_SEGMENT_PATTERN.fullmatch(s) and \"..\" not in s for s in segments):\n            return unknown(\"maven purl namespace has invalid characters\", ecosystem)",
+        "fix_after": "    if ecosystem == \"maven\":\n        if \"/\" in parsed.namespace:\n            return unknown(\"maven purl namespace must use dots, not slashes\", ecosystem)\n        if not GROUP_SEGMENT_PATTERN.fullmatch(parsed.namespace) or \"..\" in parsed.namespace:\n            return unknown(\"maven purl namespace has invalid characters\", ecosystem)\n        if parsed.namespace != parsed.namespace.lower() or parsed.name != parsed.name.lower():\n            return unknown(\"maven purl has upper-case letters, which OSV may not match\", ecosystem)"
+      }
+    ],
+    "http_exchange_ids": [
+      "36",
+      "47"
+    ]
+  },
+  {
+    "id": "vuln-0005",
+    "title": "Same-version range boundaries misordered, hiding reintroduced affected versions",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:43:28 UTC",
+    "description": "The OSV range walk in the CRA matcher sorts a fixed boundary before a later introduced boundary at the same version. A version that is affected again after the reintroduction is therefore computed as not affected. The evaluation step then reports it as UNKNOWN, so an actively exploited (KEV-listed) affected component gets urgent human review instead of a report case.",
+    "impact": "A component affected by a KEV-listed vulnerability through a same-version reintroduction is routed to URGENT_HUMAN_REVIEW instead of REPORT_CASE. The matcher's direct result for the same version is NOT_AFFECTED. Demonstrated with a crafted OSV-style record; the scope is limited to range shapes with a same-version end and start inside one range.",
+    "target": "cra-scan (src/matcher.py)",
+    "technical_analysis": "_intervals converts OSV introduced, fixed and last_affected events into start, end and inclusive spans. It sorts the parsed events by (version, is_end), so at an equal version every start is placed before every end. The loop then skips a start while a span is already open. For a range introduced 2.0-beta9, fixed 2.12.2, introduced 2.12.2, the sorted order is introduced 2.0-beta9, introduced 2.12.2, fixed 2.12.2. The second start is skipped as redundant, and the fixed event closes the span at 2.12.2. The span that the event list describes as open from 2.12.2 onward is lost, so the version 2.14.1 falls outside every span and match_vulnerability returns NOT_AFFECTED (maven_numeric_range). Only the written order distinguishes this case from a zero-width span, so ties must keep the order in which the events were written. evaluate passes osv_listed=True, so the matcher's NOT_AFFECTED is converted to UNKNOWN (osv_says_affected_but_our_check_disagrees). For a KEV-listed CVE this yields URGENT_HUMAN_REVIEW rather than REPORT_CASE.",
+    "poc_description": "1. Run from the repository root with the project's Python environment, which has the packageurl and packaging dependencies installed.\n2. Load an OSV-style record for org.apache.logging.log4j:log4j-core whose single ECOSYSTEM range is introduced 2.0-beta9, fixed 2.12.2, introduced 2.12.2, and whose alias is the KEV-listed CVE-2021-44228.\n3. Check pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1. The reintroduction at 2.12.2 is open-ended, so 2.14.1 is affected; the correct answer is AFFECTED.\n4. Evaluate the same component with a KEV list containing CVE-2021-44228. The correct action is REPORT_CASE.",
+    "poc_script_code": "import sys\nsys.path.insert(0, '.')\nfrom src import matcher\nfrom src.news_watcher import Feeds\nfrom src.sbom_reader import Component\nrecord = {\n    'id': 'GHSA-example-0000-0001',\n    'aliases': ['CVE-2021-44228'],\n    'affected': [{\n        'package': {'ecosystem': 'Maven', 'name': 'org.apache.logging.log4j:log4j-core'},\n        'ranges': [{'type': 'ECOSYSTEM', 'events': [\n            {'introduced': '2.0-beta9'},\n            {'fixed': '2.12.2'},\n            {'introduced': '2.12.2'},\n        ]}],\n    }],\n}\npurl = 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1'\nprint('match_vulnerability:', matcher.match_vulnerability(purl, record, osv_listed=False))\ncomponent = Component('log4j-core', '2.14.1', purl, 'maven', 'OK')\nfeeds = Feeds(kev_ids={'CVE-2021-44228'}, kev_status={'status': 'ok'},\n              purl_vulns={purl: [record['id']]}, vulns={record['id']: record})\nfinding = matcher.evaluate([component], feeds)['findings'][0]\nprint('evaluate:', finding['status'], finding['rule'], finding['exploited'], finding['action'])",
+    "remediation_steps": "Keep the order in which range events were written when two events share a version, instead of forcing every start before every end. Then the reintroduction at the same version is applied after the preceding fixed event, and the open span is kept. Add a regression test with a same-version fixed and introduced pair, asserting AFFECTED for a version after the reintroduction and an UNKNOWN or AFFECTED result (never NOT_AFFECTED) for a reversed-order tie.",
+    "evidence": "Observed on the unpatched code, run from the repository root:\n\nmatch_vulnerability: ('NOT_AFFECTED', 'maven_numeric_range')\nevaluate: UNKNOWN osv_says_affected_but_our_check_disagrees exploited=True action=URGENT_HUMAN_REVIEW\n\nExpected per OSV range semantics: AFFECTED for 2.14.1 and action REPORT_CASE.\n\nDifferential check of the range walk against a state-machine reference over generated ECOSYSTEM ranges (PyPI and Maven, 15,000 records each): 1,051 and 864 false negatives respectively, all involving a start and an end at the same version, and zero false positives. After the ordering change the same checks return zero false negatives and zero false positives, and all 100 matcher tests still pass.",
+    "assumptions": "An OSV-style feed record (or a record delivered through a compromised feed or man-in-the-middle position) contains a single ECOSYSTEM range in which a fixed or last_affected event and a later introduced event share the same version. The saved OSV test fixtures (50 ECOSYSTEM ranges) contain no such pair.",
+    "counterevidence": "The shape requires one range to contain a same-version end and start. In the saved OSV fixtures (50 ECOSYSTEM ranges) no such pair occurs, so this is not produced by the data observed so far. The defect is also masked by design in the evaluation step: a NOT_AFFECTED from the matcher is never shown as NOT_AFFECTED, so the wrong result appears as UNKNOWN with human review rather than as a silent safe answer, and the action is still urgent when the CVE is exploited. The defect does not affect the other range types or the exact version lists.",
+    "confidence": "high",
+    "severity_change_conditions": "Evidence that real OSV feeds publish same-version reintroduction pairs inside a single range would raise this to medium. Evidence that the only way to reach it is a crafted or compromised feed record would keep it low.",
+    "fix_effort": "trivial",
+    "cvss": 3.7,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "L",
+      "availability": "N"
+    },
+    "endpoint": "src/matcher.py::_intervals",
+    "method": "N/A",
+    "cwe": "CWE-697",
+    "code_locations": [
+      {
+        "file": "src/matcher.py",
+        "start_line": 112,
+        "end_line": 112,
+        "label": "Sort range events so the written order decides ties at the same version",
+        "fix_before": "    parsed.sort(key=lambda item: (item[0], item[1]))  # at the same version a start comes first",
+        "fix_after": "    parsed.sort(key=lambda item: item[0])  # same version: keep the order the events were written in"
+      }
+    ],
+    "fix_verification": "Gate 1 (applicability): one line changed at src/matcher.py:112; the file compiles. Gate 2 (security closure): the PoC prints AFFECTED maven_numeric_range for match_vulnerability and AFFECTED maven_numeric_range True REPORT_CASE for evaluation after the change. The differential range check reports 0 false negatives and 0 false positives for PyPI and Maven (15,000 records each); before the change it reported 1,051 and 864 false negatives. Gate 3 (bypass review): _intervals is the only place that sorts range events. Reversed-order ties now return UNKNOWN instead of a wrong NOT_AFFECTED; zero-width introduced X plus fixed X still returns NOT_AFFECTED. Gate 4 (preserved behavior): existing tests for out-of-order events, two ranges in one record, pre-release and unreadable limits pass. Gate 5 (repository checks): python3 -m pytest -q tests gives 408 passed, 2 skipped. Not run: bandit and a formatter.",
+    "finding_class": "dynamic",
+    "agent_id": "6064b7d6",
+    "agent_name": "Matcher Logic Agent"
+  },
+  {
+    "id": "vuln-0006",
+    "title": "Unchecked components recorded as known not exploited when OSV gives no answer",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:43:46 UTC",
+    "description": "When OSV gives no answer for a component, or the details of a listed advisory cannot be loaded or read, the matcher records the finding as exploited_known = True whenever the KEV list is fresh. The tool never compared that component's CVEs with KEV, yet the finding states that its exploitation status is known and routes it to ordinary human review rather than urgent review.",
+    "impact": "An affected component with an unanswered OSV query and a KEV-listed CVE is shown with exploited False and exploited_known True, and its action is HUMAN_REVIEW instead of URGENT_HUMAN_REVIEW. The output asserts a check that did not happen. The run is still marked RESULT INCOMPLETE, so the operator is warned, but the per-finding urgency and the stored finding record are wrong.",
+    "target": "cra-scan (src/matcher.py)",
+    "technical_analysis": "evaluate hands every finding an exploited_known flag. For findings with a usable CVE list, the flag is computed from the KEV freshness and from invalid evidence files. For three paths the code passes the KEV freshness itself, although no CVE of the component was looked up:\n\n```python title=src/matcher.py startLineNumber=396 endLineNumber=396\n            findings.append(_finding(component, None, UNKNOWN, \"osv_gave_no_answer\", exploited_known=kev_ok))\n```\n\nThe same pattern appears at line 401 (osv_details_missing) and line 413 (record_malformed). With a fresh KEV list, `exploited_known` becomes True, and `action_for` then returns HUMAN_REVIEW for an UNKNOWN finding. The code's own rule for the KEV-failed case is that an unchecked exploitation status must be urgent (test_failed_kev_download_never_turns_into_not_exploited expects URGENT_HUMAN_REVIEW), so the same state is handled inconsistently depending on whether the KEV feed failed or OSV failed. The paths on the same lines are reached when the purl has no OSV answer, when a listed advisory cannot be downloaded or validated, or when the advisory cannot be evaluated.",
+    "poc_description": "1. Run from the repository root with the project's Python environment.\n2. Build a component for pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1 and a feed set where OSV gave no answer for that purl (purl_vulns value None), with a fresh KEV list that contains CVE-2021-44228.\n3. Run the CRA evaluation step and read the single finding.\n4. The correct record marks exploited_known as False and the action as URGENT_HUMAN_REVIEW, because the component's CVEs were never checked against KEV.\n5. Repeat with the advisory listed but its details missing (vulns value None) to see the same result.",
+    "poc_script_code": "import sys\nsys.path.insert(0, '.')\nfrom src import matcher\nfrom src.news_watcher import Feeds\nfrom src.sbom_reader import Component\npurl = 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1'\ncomponent = Component('log4j-core', '2.14.1', purl, 'maven', 'OK')\nno_answer = Feeds(kev_ids={'CVE-2021-44228'}, kev_status={'status': 'ok'}, purl_vulns={purl: None}, vulns={})\nfinding = matcher.evaluate([component], no_answer)['findings'][0]\nprint('no OSV answer:', finding['rule'], 'exploited=', finding['exploited'], 'exploited_known=', finding['exploited_known'], finding['action'])\nmissing = Feeds(kev_ids={'CVE-2021-44228'}, kev_status={'status': 'ok'}, purl_vulns={purl: ['GHSA-jfh8-c2jp-5v3q']}, vulns={'GHSA-jfh8-c2jp-5v3q': None})\nfinding = matcher.evaluate([component], missing)['findings'][0]\nprint('details missing:', finding['rule'], 'exploited=', finding['exploited'], 'exploited_known=', finding['exploited_known'], finding['action'])",
+    "remediation_steps": "On the three paths where no CVE list was obtained (no OSV answer, advisory details missing, and an advisory that cannot be evaluated), record exploited_known as False, so the finding follows the same urgent-review rule that already applies to a failed KEV download. Apply the same invariant to components without a purl, which currently pass the KEV freshness as well; that change alters the urgency of every component without a purl, so the maintainers should confirm it as product policy before it is made.",
+    "evidence": "Observed on the unpatched code, run from the repository root with a fresh KEV list (status ok) that contains CVE-2021-44228:\n\nno OSV answer: osv_gave_no_answer exploited= False exploited_known= True HUMAN_REVIEW\ndetails missing: osv_details_missing exploited= False exploited_known= True HUMAN_REVIEW\n\nWith the KEV download marked failed, the same state returns exploited_known False and URGENT_HUMAN_REVIEW, which shows the inconsistency. After the change in the working copy, both OSV paths return exploited_known False and URGENT_HUMAN_REVIEW. The full test suite passes (408 passed, 2 skipped).",
+    "assumptions": "OSV does not answer for a component, or the details of an advisory it lists cannot be downloaded or read, while the KEV list downloads fresh. The operator runs the tool and reads the per-finding action rather than only the run summary.",
+    "counterevidence": "The CLI prints RESULT INCOMPLETE for any run with an OSV failure and warns about data gaps, and the exit code is non-zero, so the operator is warned that the run is not trustworthy. The change only affects the urgency label and the stored exploited_known value, not the exploited flag or the affected status. A KEV-listed CVE for a component whose OSV answer is missing would still not be found, which is an OSV data gap rather than a matcher decision. Components without a purl are the same invariant but are left as a policy question.",
+    "confidence": "high",
+    "severity_change_conditions": "Evidence that the run summary alone is used for triage (so the per-finding action is never read) would not raise the rating, while evidence that a KEV-listed affected component routinely has an OSV no-answer at run time would raise it to medium.",
+    "fix_effort": "trivial",
+    "cvss": 3.7,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "L",
+      "availability": "N"
+    },
+    "endpoint": "src/matcher.py::evaluate",
+    "method": "N/A",
+    "cwe": "CWE-754",
+    "code_locations": [
+      {
+        "file": "src/matcher.py",
+        "start_line": 396,
+        "end_line": 396,
+        "label": "OSV gave no answer: exploitation status was not checked",
+        "fix_before": "            findings.append(_finding(component, None, UNKNOWN, \"osv_gave_no_answer\", exploited_known=kev_ok))",
+        "fix_after": "            findings.append(_finding(component, None, UNKNOWN, \"osv_gave_no_answer\", exploited_known=False))"
+      },
+      {
+        "file": "src/matcher.py",
+        "start_line": 401,
+        "end_line": 401,
+        "label": "OSV advisory details missing: exploitation status was not checked",
+        "fix_before": "                findings.append(_finding(component, vuln_id, UNKNOWN, \"osv_details_missing\", exploited_known=kev_ok))",
+        "fix_after": "                findings.append(_finding(component, vuln_id, UNKNOWN, \"osv_details_missing\", exploited_known=False))"
+      },
+      {
+        "file": "src/matcher.py",
+        "start_line": 413,
+        "end_line": 413,
+        "label": "Advisory could not be evaluated: exploitation status was not checked",
+        "fix_before": "                findings.append(_finding(component, vuln_id, UNKNOWN, \"record_malformed\", exploited_known=kev_ok))",
+        "fix_after": "                findings.append(_finding(component, vuln_id, UNKNOWN, \"record_malformed\", exploited_known=False))"
+      }
+    ],
+    "fix_verification": "Gate 1 (applicability): three single-line changes at src/matcher.py:396, 401 and 413; the file compiles (python3 -m py_compile). Gate 2 (security closure): the PoC now prints exploited_known False and URGENT_HUMAN_REVIEW for both the no-answer and details-missing states. Gate 3 (bypass review): the remaining sibling is the component_unknown path (line 391), which still passes the KEV freshness; it is the same invariant but changes the urgency of every component without a purl, so it is deliberately left as a product decision. The normal path at line 416 is unchanged: a checked advisory has a real KEV result, so its flag remains valid. Gate 4 (preserved behavior): the exploited flag, status, rule and the failed-KEV behaviour are unchanged; the existing KEV-failed test still passes. Gate 5 (repository checks): python3 -m pytest -q tests gives 408 passed, 2 skipped. Not run: an end-to-end CLI run with a real OSV failure, and bandit.",
+    "finding_class": "dynamic",
+    "agent_id": "6064b7d6",
+    "agent_name": "Matcher Logic Agent"
+  },
+  {
+    "id": "vuln-0007",
+    "title": "Substituted CISA KEV list is accepted as complete, silently dropping exploited CVEs",
+    "severity": "medium",
+    "timestamp": "2026-10-25 15:44:02 UTC",
+    "description": "The KEV completeness check in `cra run` accepts any structurally valid KEV list whose count does not fall more than 5% below the highest count seen before. A network attacker who can intercept the CISA KEV download can remove two known-exploited entries and the tool still reports the KEV source as `ok` and the run as complete. A product whose affected component is actively exploited is then downgraded from REPORT CASE to RECORD.",
+    "impact": "An on-path attacker who can serve a modified CISA KEV response can (a) remove specific known-exploited CVEs so that affected components are reported as not exploited, turning a REPORT CASE (the 24-hour early-warning clock) into a RECORD, while the run record and `cra status` show \"all sources ok\" and `complete: true`; and (b) replay the previous KEV list with an advanced `dateReleased`, so CVEs added in the genuine update are absent from the run for the intercepted run. The tool gives no warning for either case.",
+    "target": "cra-scan CLI, KEV download (www.cisa.gov known_exploited_vulnerabilities.json), src/news_watcher.py",
+    "technical_analysis": "The KEV download is validated in `validate_kev` and stored by `fetch_kev`. The only protection against a shortened list is a count tolerance:\n\n```python title=src/news_watcher.py startLineNumber=224 endLineNumber=225\n    if saved_max_count and len(entries) < saved_max_count * (1 - MAX_KEV_DROP):\n        return \"KEV count dropped by more than 5% compared with the highest count seen before\"\n```\n\n`MAX_KEV_DROP` is `0.05` (`src/news_watcher.py:46`). The check only compares cardinality, so removing any number of entries up to 5% of the list is accepted, and removing entries while adding the same number of invented CVE ids (which pass the CVE pattern, uniqueness and date checks) is also accepted. The download is then stored as a good copy in `fetch_kev` (`src/news_watcher.py:253-254`, `_write_json_atomic` at the end of `fetch_kev`), `status` is set to `ok`, and `Feeds.sources_ok`/`complete` report the run complete. Nothing in the matcher cross-checks the KEV list against the previous copy; `exploited_status` only tests membership in `kev_ids`.\n\nThe removal in the proof of concept targets the two KEV entries that are the only KEV links for the affected log4j-core 2.14.1 records (CVE-2021-44228 and CVE-2021-45046). Removing both is 0.11% of the list, far below the 5% tolerance. The 5% tolerance is explicitly tested as intended behaviour (`tests/test_news_watcher.py`, \"drop of less than 5 percent is accepted\"), so the design choice itself is the root of the completeness gap: the tool asserts completeness and freshness from structure alone.\n\nReplay variant: `validate_kev` only rejects a `dateReleased` older than the saved copy. An on-path response that carries the previous entries with a newer `dateReleased` passes, is saved, and is reported `ok`. A later uninterrupted run then recovers the new entries, so the effect lasts for the intercepted run(s).\n\nThe first run has no saved copy and no baseline, so any list of 1000 or more entries is accepted as complete on the first download. This is a related residual and is not separately demonstrated here.\n\nGit history is not available in the checked-out source, so no commit attribution is given.",
+    "poc_description": "1. Start from the repository's saved KEV list (1754 entries, includes CVE-2021-44228 and CVE-2021-45046), and a clean cache folder.\n2. Run `cra run` with a single affected component (log4j-core 2.14.1) and a KEV download that is served over TLS from an on-path position. The genuine download produces a REPORT CASE and exit code 3.\n3. Serve a KEV list that is structurally valid (count equals the number of entries, all cveID and dateAdded fields well formed, unique IDs, newer or equal dateReleased) and omits CVE-2021-44228 and CVE-2021-45046.\n4. Observe that the KEV source is reported `ok - downloaded and checked`, the run record has `complete: true`, the finding is `RECORD` with `exploited: false`, the exit code drops to 1, and the saved KEV copy no longer contains the two CVEs.\n5. Repeat step 3 with the omitted list padded by two invented valid CVE identifiers so that the entry count is unchanged; the same result occurs.",
+    "poc_script_code": "```python title=repro_kev_omission.py\nimport copy\nimport json\nimport sys\nimport tempfile\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\nrepo = Path(sys.argv[1])\nsys.path.insert(0, str(repo))\nimport src.news_watcher as nw  # noqa: E402\n\nkev = json.loads((repo / \"tests\" / \"fixtures\" / \"kev.json\").read_text())\nnow = lambda: datetime(2026, 10, 25, 12, 0, 0, tzinfo=timezone.utc)  # noqa: E731\ncache = Path(tempfile.mkdtemp())\n\n\ndef fetch(data):\n    return lambda url, body=None, max_bytes=0: json.dumps(data).encode()\n\n\n_, status = nw.fetch_kev(cache, fetch(kev), lambda s: None, now)\nprint(\"1. genuine list      :\", status[\"status\"], \"-\", status[\"detail\"])\n\nomitted = copy.deepcopy(kev)\nomitted[\"vulnerabilities\"] = [e for e in omitted[\"vulnerabilities\"] if e[\"cveID\"] not in {\"CVE-2021-44228\", \"CVE-2021-45046\"}]\nomitted[\"count\"] = len(omitted[\"vulnerabilities\"])\ndata, status = nw.fetch_kev(cache, fetch(omitted), lambda s: None, now)\nprint(\"2. list minus 2 CVEs :\", status[\"status\"], \"-\", status[\"detail\"])\nprint(\"   CVE-2021-44228 still in the list handed to the matcher:\", any(e[\"cveID\"] == \"CVE-2021-44228\" for e in data[\"vulnerabilities\"]))\n\npadded = copy.deepcopy(omitted)\npadded[\"vulnerabilities\"] += [{\"cveID\": f\"CVE-2026-9{i:04d}\", \"dateAdded\": \"2026-10-20\"} for i in (1, 2)]\npadded[\"count\"] = len(padded[\"vulnerabilities\"])\ncache2 = Path(tempfile.mkdtemp())\nnw.fetch_kev(cache2, fetch(kev), lambda s: None, now)\n_, status = nw.fetch_kev(cache2, fetch(padded), lambda s: None, now)\nprint(\"3. same, padded with 2 invented ids:\", status[\"status\"], \"-\", status[\"detail\"])\n```",
+    "remediation_steps": "Reject any new KEV list that does not contain every CVE identifier in the saved copy, and do not allow a count tolerance below the highest count seen. Treat a list that fails this check as `stale` so the run is marked incomplete and the saved copy is kept. Add an authenticity check on the KEV file (a signature or a pinned content hash) before its content is treated as complete, because a structural check cannot detect a replay of the previous list with a newer date. Before merging, confirm CISA's policy on removing entries, since a legitimate removal would then block later downloads until the saved copy is deleted.",
+    "evidence": "Reproduction against the unmodified source (the lines are the output of the reproducer above):\n\n```text\n1. genuine list      : ok - downloaded and checked\n2. list minus 2 CVEs : ok - downloaded and checked\n   CVE-2021-44228 still in the list handed to the matcher: False\n3. same, padded with 2 invented ids: ok - downloaded and checked\n```\n\nEnd-to-end `cra run` with the same affected SBOM (one log4j-core 2.14.1 component), before and after the omission:\n\n```text\nS0 good feed (1754 entries)\n  Source KEV: ok - downloaded and checked\n  exit=3 run.complete=True\n  [REPORT CASE] log4j-core 2.14.1: GHSA-jfh8-c2jp-5v3q (CVE-2021-44228) -> AFFECTED - ACTIVELY EXPLOITED per kev\nS1 feed silently omits CVE-2021-44228 and CVE-2021-45046 (1752 entries, count=1752)\n  Source KEV: ok - downloaded and checked\n  exit=1 run.complete=True\n  finding: action RECORD, exploited false\n```\n\nAfter the fix, the same omission is rejected and the good copy is kept:\n\n```text\n2. list minus 2 CVEs : stale - download failed (KEV no longer lists entries that were in the saved copy); using the saved copy\n3. same, padded with 2 invented ids: stale - download failed (KEV no longer lists entries that were in the saved copy); using the saved copy\n```",
+    "assumptions": "The attacker controls the network path between the operator and www.cisa.gov (for example, TLS interception with a certificate the operator's system trusts, or a compromised upstream serving the file). The operator runs `cra run` against the default KEV URL. No independent integrity check of the KEV file (signature or pinned hash) exists in the tool.",
+    "counterevidence": "The strongest case against this finding: (1) the attacker needs a TLS-trusted interception position for a US government host, which is a high bar. The Python default verification is on (`http_fetch`), so a plain network attacker without a trusted certificate is rejected; this is why AC is H. (2) The 5% tolerance is a deliberate design choice, documented in `MAX_KEV_DROP` and enforced by a test, so the tool does not claim to detect every omission. (3) The run is not silent in the narrow sense: `Source KEV: ok` is printed. The counterpoint is that the status line says `ok - downloaded and checked`, which asserts completeness that the code cannot verify, and the run record is marked `complete: true`. (4) The first run has no baseline, and the list shrink check is relative to a previous good copy. The replay variant needs no removal and is not stopped by any control in the repository. I did not find a control that prevents the on-path substitution itself.",
+    "confidence": "high",
+    "confidence_rationale": "The validation logic was exercised end to end on the real TLS download path (`http_fetch`, `fetch_kev`, `validate_kev`, matcher, run record) with a locally trusted certificate; the interception itself is simulated, which is the attacker-position assumption.",
+    "severity_change_conditions": "Demonstrating the interception from an unprivileged network position (for example an open network with a trust anchor an attacker can install) would raise the attack complexity assessment and the rating to High; adding an integrity check on the KEV file (signature or pinned content) would lower it to Low.",
+    "fix_effort": "medium",
+    "cvss": 5.9,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "H",
+      "availability": "N"
+    },
+    "endpoint": "cra run (fetch_kev -> validate_kev)",
+    "method": "GET",
+    "cwe": "CWE-345",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 190,
+        "end_line": 190,
+        "label": "validate_kev accepts the saved entry ids",
+        "fix_before": "def validate_kev(data, saved_max_count=None, saved_released=None):",
+        "fix_after": "def validate_kev(data, saved_max_count=None, saved_released=None, saved_ids=None):"
+      },
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 224,
+        "end_line": 225,
+        "label": "Reject any list that no longer contains a saved entry; no count tolerance",
+        "fix_before": "    if saved_max_count and len(entries) < saved_max_count * (1 - MAX_KEV_DROP):\n        return \"KEV count dropped by more than 5% compared with the highest count seen before\"",
+        "fix_after": "    if saved_ids and not saved_ids <= seen:\n        return \"KEV no longer lists entries that were in the saved copy\"\n    if saved_max_count and len(entries) < saved_max_count:\n        return \"KEV count dropped below the highest count seen before\""
+      },
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 253,
+        "end_line": 253,
+        "label": "Pass the saved entry ids from fetch_kev",
+        "fix_before": "        problem = validate_kev(data, saved_max or None, saved[\"dateReleased\"] if saved else None)",
+        "fix_after": "        problem = validate_kev(\n            data, saved_max or None, saved[\"dateReleased\"] if saved else None,\n            {e[\"cveID\"] for e in saved[\"vulnerabilities\"]} if saved else None,\n        )"
+      },
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 46,
+        "end_line": 46,
+        "label": "Informational: the MAX_KEV_DROP constant that the fix removes",
+        "fix_before": "MAX_KEV_DROP = 0.05  # the count may not drop by more than 5% below the highest count we have seen"
+      }
+    ],
+    "fix_verification": "Gate 1, applicability: the patch was applied to a copy of the repository. The diff touches only `src/news_watcher.py` and `tests/test_news_watcher.py`; the location blocks match the original text character for character. The `MAX_KEV_DROP` line (46) is informational here: the fix removes it, so it is not an applicable replacement block.\n\nGate 2, security closure: re-ran the reproducer against the patched copy. The omitted list (two CVEs removed) and the padded list (two CVEs removed, two invented ids added) are both rejected with `KEV no longer lists entries that were in the saved copy`, and the saved copy keeps CVE-2021-44228. End-to-end `cra run` with the same omission now yields `Source KEV: stale`, `run.complete=False`, and the saved copy still lists both CVEs. Closure is verified for removal of entries that were in the saved copy.\n\nGate 2 gap: the replay variant (old list, newer `dateReleased`) is not closed. The patched code accepts it and the new genuine CVE is absent for the intercepted run. Closing it needs content authenticity (signature or pinned hash) or a second source, which is outside a local structural check. This patch does not claim to close it.\n\nGate 3, bypass review: traced the changed branch from `fetch_kev` only; `validate_kev` is also called by `load_kev_cache` with no saved ids, so cached-copy loading is unchanged. Tried the padded omission (rejected) and a clean superset with a higher count (accepted, correct). The count check remains as a second guard against a shrinking watermark.\n\nGate 3 gap: a list that adds new entries and drops none is still accepted; that is correct behaviour, but it means a suppressed genuine update is only detected on a later uninterrupted run.\n\nGate 3 trade-off to confirm with maintainers: if CISA ever legitimately removes an entry from KEV, the new check will mark every later download `stale` until the saved copy is deleted. I could not verify CISA's removal policy offline, so this is stated as an open decision, not as a known fact.\n\nGate 3 residual: the first run (no saved copy) still accepts any list of 1000 or more entries.\n\nGate 4, preserved behaviour: the public functions keep their signatures (`validate_kev` gains an optional trailing argument). The normal path (`genuine list: ok`) and the replay-rejection path (older `dateReleased`) are unchanged.\n\nGate 5, repository checks: `python3 -m pytest -q` in the copy: 411 passed, 2 skipped (baseline before changes: 408 passed, 2 skipped). The test `test_kev_drop_of_less_than_5_percent_is_accepted` was replaced by `test_kev_drop_of_a_single_entry_is_rejected_and_old_copy_kept`, and `test_kev_omission_padded_with_invented_ids_is_rejected` was added. The 5% test message assertion was updated to the new message. The 2 skipped tests are the live network tests that require `CRA_LIVE_TEST=1`.",
+    "fix_pr_body": "## Summary\n\nThe KEV completeness check accepted up to 5% of the list being removed, and an omission padded with invented ids. The run was then reported complete and KEV `ok`, so a REPORT CASE could be silently downgraded to RECORD.\n\n## Change\n\n- Remove the `MAX_KEV_DROP` tolerance.\n- Reject any new list that does not contain every CVE id from the saved copy (`saved_ids` superset check), and keep the count check against the highest count seen.\n- Update the two KEV tests that encoded the 5% tolerance and add a regression test for the padded omission.\n\n## Not covered\n\n- An on-path replay of the previous list with a newer `dateReleased` is still accepted. This needs content authenticity (signature or pinned hash) and is a separate decision.\n- The first run with no saved copy still has no baseline.\n- Confirm CISA's removal policy before merging: a legitimate removal would block later downloads until the saved copy is deleted.",
+    "finding_class": "dynamic",
+    "agent_id": "9103d8bf",
+    "agent_name": "Feed Fetch and Cache Agent"
+  },
+  {
+    "id": "vuln-0008",
+    "title": "Future-dated KEV response freezes the saved KEV copy until the operator intervenes",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:44:25 UTC",
+    "description": "`validate_kev` accepts any well-formed `dateReleased`, including dates far in the future. One intercepted KEV response with a future date replaces the saved good copy. Every later genuine KEV download is then rejected as \"older than the saved copy (possible replay)\", so the tool keeps using the frozen copy and no longer picks up new KEV entries until the operator deletes the cache file.",
+    "impact": "A single on-path response with a future `dateReleased` makes the KEV source `stale` on every later run, so each run is marked RESULT INCOMPLETE and newly added KEV entries are never recognised. Affected components with no KEV match are then routed to urgent human review rather than checked against the current list. The condition persists until someone deletes the saved KEV file, and the status message blames a \"possible replay\" that did not happen.",
+    "target": "cra-scan CLI, KEV download (www.cisa.gov known_exploited_vulnerabilities.json), src/news_watcher.py",
+    "technical_analysis": "`validate_kev` checks that `dateReleased` parses as a timezone-aware time, but has no upper bound:\n\n```python title=src/news_watcher.py startLineNumber=198 endLineNumber=199\n    if released is None:\n        return \"KEV dateReleased is not a valid time\"\n```\n\nThe replay check in the same function then compares every later genuine download against this future value:\n\n```python title=src/news_watcher.py startLineNumber=228 endLineNumber=230\n    saved_time = _parse_time(saved_released)\n    if saved_time is not None and released < saved_time:\n        return \"KEV dateReleased is older than the saved copy (possible replay)\"\n```\n\nA future `saved_released` makes every genuine download \"older\", so `fetch_kev` falls back to the saved copy (`status: stale`). `fetch_kev` only overwrites the saved copy on a download that passes `validate_kev`, so the frozen copy is never replaced. `load_kev_cache` also re-validates the saved copy with `validate_kev`, which does not reject a future date, so the poisoned copy keeps being loaded.\n\nThe matcher gates non-exploited verdicts on the KEV status (`kev_ok` in `src/matcher.py`), so the freeze produces urgent review rather than a silent \"not exploited\"; the impact is therefore availability and a persistent incomplete state rather than a silent integrity failure.",
+    "poc_description": "1. Start with a clean cache folder and run `cra run` against a genuine KEV list (dateReleased 2026-10-20). The KEV status is `ok`.\n2. Serve a KEV list with the same entries and `dateReleased` set to `2099-01-01T00:00:00Z`. The response is accepted: KEV status is `ok` and the saved copy now carries the future date.\n3. Serve a genuine newer list (dateReleased 2026-10-21) that adds one new KEV CVE. The response is rejected with `possible replay`, the KEV status becomes `stale`, the run is `RESULT INCOMPLETE`, and the new CVE is absent from the saved copy on every later run.",
+    "poc_script_code": "```python title=repro_kev_future.py\nimport copy\nimport json\nimport sys\nimport tempfile\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\nrepo = Path(sys.argv[1])\nsys.path.insert(0, str(repo))\nimport src.news_watcher as nw  # noqa: E402\n\nkev = json.loads((repo / \"tests\" / \"fixtures\" / \"kev.json\").read_text())\nnow = lambda: datetime(2026, 10, 25, 12, 0, 0, tzinfo=timezone.utc)  # noqa: E731\ncache = Path(tempfile.mkdtemp())\n\n\ndef fetch(data):\n    return lambda url, body=None, max_bytes=0: json.dumps(data).encode()\n\n\n_, status = nw.fetch_kev(cache, fetch(kev), lambda s: None, now)\nprint(\"1. genuine list           :\", status[\"status\"], \"-\", status[\"detail\"])\n\nfuture = copy.deepcopy(kev)\nfuture[\"dateReleased\"] = \"2099-01-01T00:00:00Z\"\n_, status = nw.fetch_kev(cache, fetch(future), lambda s: None, now)\nprint(\"2. future-dated list      :\", status[\"status\"], \"-\", status[\"detail\"])\n\nnewer = copy.deepcopy(kev)\nnewer[\"vulnerabilities\"].append({\"cveID\": \"CVE-2026-99999\", \"dateAdded\": \"2026-10-21\"})\nnewer[\"count\"] = len(newer[\"vulnerabilities\"])\nnewer[\"dateReleased\"] = \"2026-10-21T10:00:00.0000Z\"\n_, status = nw.fetch_kev(cache, fetch(newer), lambda s: None, now)\nprint(\"3. genuine newer list     :\", status[\"status\"], \"-\", status[\"detail\"])\n```",
+    "remediation_steps": "Reject a KEV `dateReleased` that is later than the current time plus a small clock-skew allowance, in the same validation function that already rejects malformed dates. Keep the rejection in the download path so a rejected response never replaces the saved copy. Also make the saved-copy loader apply the same check so a copy saved before this fix is discarded instead of being loaded.",
+    "evidence": "Reproduction against the unmodified source:\n\n```text\n1. genuine list           : ok - downloaded and checked\n2. future-dated list      : ok - downloaded and checked\n3. genuine newer list     : stale - download failed (KEV dateReleased is older than the saved copy (possible replay)); using the saved copy\n```\n\nEnd-to-end `cra run` (same product as the other KEV reports) on the unmodified source:\n\n```text\nF-2 future-dated feed\n  Source KEV: ok - downloaded and checked\n  exit=3 run.complete=True\nF-3 genuine newer feed\n  Source KEV: stale - download failed (KEV dateReleased is older than the saved copy (possible replay)); using the saved copy\n  RESULT INCOMPLETE - do not rely on this.\n  exit=3 run.complete=False\n  CVE-2026-99999 in saved copy: False; saved dateReleased: 2099-01-01T00:00:00Z\n```\n\nAfter the fix, the future-dated response is rejected at step 2 (`KEV dateReleased is in the future`) and the genuine newer list is accepted with the new CVE present.",
+    "assumptions": "The attacker can deliver one modified KEV response to the operator (on-path position with a trusted certificate, as for the other KEV report). The operator then runs `cra run` normally; no operator action is needed to trigger the freeze.",
+    "counterevidence": "(1) The attacker needs an on-path position with a trusted certificate for www.cisa.gov, the same precondition as the other KEV finding. (2) The impact is a persistent but visible state: every run prints `Source KEV: stale` and `RESULT INCOMPLETE`, so the operator is alerted, and the matcher escalates unmatched findings to urgent human review instead of marking them not exploited. That limits the consequence to availability and operator workload, which is why the rating is Low. (3) Deleting the saved KEV file clears the freeze, so recovery is possible. I checked whether a future date could be used to suppress a silent verdict: `src/matcher.py` gates non-exploited findings on `kev_ok`, so no silent \"not exploited\" result was produced in the reproduction.",
+    "confidence": "high",
+    "confidence_rationale": "Reproduced end to end on the real KEV code path (fetch_kev, validate_kev, saved copy, run record) with the same simulated on-path response as the other KEV report.",
+    "severity_change_conditions": "If the freeze could be made silent (for example, if the matcher trusted the frozen copy without the stale status gate), the rating would rise to Medium; a check that the saved copy is not older than the stale threshold would lower the rating to informational.",
+    "fix_effort": "trivial",
+    "cvss": 3.7,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "N",
+      "availability": "L"
+    },
+    "endpoint": "cra run (fetch_kev -> validate_kev)",
+    "method": "GET",
+    "cwe": "CWE-345",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 198,
+        "end_line": 199,
+        "label": "Reject a KEV dateReleased in the future",
+        "fix_before": "    if released is None:\n        return \"KEV dateReleased is not a valid time\"",
+        "fix_after": "    if released is None:\n        return \"KEV dateReleased is not a valid time\"\n    if released > utc_now() + timedelta(days=1):\n        return \"KEV dateReleased is in the future\""
+      }
+    ],
+    "fix_verification": "Gate 1, applicability: a two-line insertion after the existing `dateReleased` check; `utc_now` and `timedelta` are already defined and imported in `src/news_watcher.py`. The original lines 198-199 match the `fix_before` text.\n\nGate 2, security closure: the future-dated list is rejected with `KEV dateReleased is in the future` and the saved copy is not replaced. The genuine newer list is then accepted and includes the new entry (reproducer steps 2 and 3 after the patch).\n\nGate 3, bypass review: a `dateReleased` up to one day ahead is still accepted, so a freeze of up to one day is possible per intercepted response; the check bounds the freeze rather than removing it. `load_kev_cache` re-runs `validate_kev` on the saved copy, so a copy saved before the patch with a future date is now discarded on load and the next genuine download is accepted, which restores the baseline. Clock skew of more than one day on the operator's machine would reject a genuine list (fail-safe, `stale`).\n\nGate 4, preserved behaviour: the normal path (`dateReleased` at or before now) is unchanged, and the replay check still rejects older dates.\n\nGate 5, repository checks: `python3 -m pytest -q` in the copy: 411 passed, 2 skipped, including the new `test_kev_date_released_in_the_future_is_rejected`. The test asserts that the future-dated list is reported as a problem, which the unmodified `validate_kev` does not do (the reproducer shows `ok` for the same input).",
+    "fix_pr_body": "## Summary\n\n`validate_kev` accepted any `dateReleased`, so one future-dated KEV response could replace the saved copy and block every later genuine download as a \"replay\".\n\n## Change\n\nReject a KEV `dateReleased` more than one day in the future, in the same validation function. A regression test covers the future-dated response and checks that the saved copy is kept.",
+    "finding_class": "dynamic",
+    "agent_id": "9103d8bf",
+    "agent_name": "Feed Fetch and Cache Agent",
+    "update_history": [
+      {
+        "timestamp": "2026-10-25 15:45:53 UTC",
+        "fields": [
+          "fix_verification"
+        ],
+        "reason": "Clarified the saved-copy loader note in fix verification: load_kev_cache re-runs validate_kev on the saved copy, so a copy saved before the patch with a future date is now discarded on load and the next genuine download is accepted.",
+        "agent_id": "9103d8bf",
+        "agent_name": "Feed Fetch and Cache Agent"
+      }
+    ],
+    "updated_at": "2026-10-25 15:45:53 UTC"
+  },
+  {
+    "id": "vuln-0009",
+    "title": "Total download deadline is not enforced during reads, so a slow response can stall a run indefinitely",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:44:48 UTC",
+    "description": "`http_fetch` applies a 120-second total deadline, but checks it only between `read()` calls. `HTTPResponse.read(64 * 1024)` blocks until 64 KB arrive or the connection closes, so a server that sends a byte every few seconds keeps one read open and defeats the deadline. The per-read socket timeout only catches silence longer than 30 seconds, so a drip below that interval stalls `cra run` for as long as the server keeps dribbling bytes.",
+    "impact": "An on-path attacker who can serve OSV or KEV responses can make a single download take an unbounded time, which stops the scheduled `cra run` from finishing. No run record is written for the stalled run, so the last saved record ages until `cra status` reports the run as overdue. The check is interrupted only when the operator kills the process.",
+    "target": "cra-scan CLI, OSV and KEV downloads, src/news_watcher.py (http_fetch)",
+    "technical_analysis": "The deadline and the read loop are in `http_fetch`:\n\n```python title=src/news_watcher.py startLineNumber=100 endLineNumber=111\n        with opener.open(request, timeout=TIMEOUT_SECONDS) as response:\n            expected = response.headers.get(\"Content-Length\")\n            chunks, size = [], 0\n            while True:\n                if time.monotonic() > deadline:\n                    raise FetchError(\"download took too long\")\n                chunk = response.read(64 * 1024)\n                if not chunk:\n                    break\n```\n\n`http.client.HTTPResponse.read(amt)` on a close-delimited or Content-Length body keeps reading from the socket until `amt` bytes are available or the stream ends. The loop therefore checks the deadline only after a full 64 KB chunk or end-of-stream. The socket timeout (`TIMEOUT_SECONDS`, 30 s) resets with each received byte, so a server that sends one byte every 25 seconds never triggers it.\n\nMeasured with the unmodified code against a local TLS server (`TOTAL_SECONDS` = 120 and `TIMEOUT_SECONDS` = 30 as shipped):\n- 8 bytes sent 20 seconds apart: the call returned `download took too long` after 160.0 s, after the server closed the stream, not at the 120 s cap.\n- 100000 bytes sent 25 seconds apart: no return within the 200-second hard limit used by the test harness, so the call would continue for about 2.5 million seconds.\n\nThe unit test for the deadline (`test_http_fetch_overall_time_limit`) mocks `time.monotonic` and does not exercise the blocking read, so it does not catch this.",
+    "poc_description": "1. Serve a TLS endpoint that responds with no Content-Length and sends one byte every 25 seconds, indefinitely.\n2. Call `http_fetch` on that URL (or run `cra run` with OSV or KEV pointed at it) with the shipped constants.\n3. Observe that the call does not return after 120 seconds and keeps reading until the server closes the stream or the process is killed. With a shorter drip (8 bytes, 20 seconds apart) the deadline error appears only at 160 seconds.",
+    "poc_script_code": "```python title=repro_drip.py\nimport sys\nimport time\nfrom pathlib import Path\n\nrepo = Path(sys.argv[1])\nsys.path.insert(0, str(repo))\nimport src.news_watcher as nw  # noqa: E402\n\nnw.ALLOWED_HOSTS = {\"127.0.0.1\"}\nstart = time.monotonic()\ntry:\n    raw = nw.http_fetch(\"https://127.0.0.1/drip?gap=20&n=8\")\n    print(\"returned\", len(raw), \"bytes after\", round(time.monotonic() - start, 1), \"s\")\nexcept nw.FetchError as error:\n    print(\"FetchError:\", error, \"after\", round(time.monotonic() - start, 1), \"s\")\n```\n\nThe local server used for the measurement answers `/drip?gap=G&n=N` by writing N bytes, one every G seconds, on a close-delimited HTTPS response. Its certificate was trusted through `SSL_CERT_FILE`.",
+    "remediation_steps": "Read the response in small pieces (for example with `read1`) so the deadline check runs after each network chunk, and keep the per-read socket timeout as the bound on silence. Add a regression test that uses a real drip-feeding stream rather than a mocked clock.",
+    "evidence": "Unmodified source, shipped constants, local TLS server:\n\n```text\n[drip 8 bytes x 20s, REAL caps (120s total / 30s per read)]  160.0s  FetchError status=None msg=download took too long\n```\n\nWith `TOTAL_SECONDS` lowered to 10 for a faster check (20 bytes, 2 seconds apart):\n\n```text\n[drip 20 bytes x 2s, TOTAL_SECONDS=10]   40.0s  FetchError status=None msg=download took too long\n```\n\nUnbounded case (100000 bytes, 25 seconds apart), killed by the 200-second hard timeout with no return.\n\nAfter the fix (`read1`), same server:\n\n```text\n[drip 20 bytes x 2s, TOTAL_SECONDS=10]   10.0s  FetchError status=None msg=download took too long\n[drip 8 bytes x 20s, REAL caps (120s total / 30s per read)]  120.0s  FetchError status=None msg=download took too long\n```",
+    "assumptions": "The attacker can answer the OSV or KEV request on the operator's behalf (on-path position with a trusted certificate). The server keeps the connection open and sends at least one byte within every 30 seconds. The run is started by a scheduler or by an operator who does not watch the process.",
+    "counterevidence": "(1) The attacker must control the OSV or KEV response, which needs the same on-path position with a trusted certificate. (2) The stall is visible: the process prints nothing and the operator can kill it, and the previous run record remains available to `cra status`, so the outcome is a delayed or missing check rather than a false result. (3) The 30-second socket timeout does stop idle connections, so only a drip below that interval is a stall; a plain stalled server is bounded. I did not find a control that bounds a slow drip; the deadline in the code is the intended control and it does not hold.",
+    "confidence": "high",
+    "confidence_rationale": "Reproduced with real socket I/O on the unmodified `http_fetch` through the shipped code path, with the interception position simulated.",
+    "severity_change_conditions": "Showing that the scheduled run is the only check for a time-critical reporting deadline, with no alerting on a missing run, would not change the rating; a demonstrated run-level hang that blocks all sources for more than the reporting window would raise availability to High.",
+    "fix_effort": "trivial",
+    "cvss": 3.7,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "N",
+      "availability": "L"
+    },
+    "endpoint": "cra run (http_fetch -> api.osv.dev / www.cisa.gov)",
+    "method": "GET",
+    "cwe": "CWE-400",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 106,
+        "end_line": 106,
+        "label": "Read in pieces so the deadline is checked after each network chunk",
+        "fix_before": "                chunk = response.read(64 * 1024)",
+        "fix_after": "                chunk = response.read1(64 * 1024)"
+      }
+    ],
+    "fix_verification": "Gate 1, applicability: a one-call change in `http_fetch`. `read1` is provided by `http.client.HTTPResponse` (Python 3.5+) and returns available bytes after at most one socket read; the original line 106 matches `fix_before`.\n\nGate 2, security closure: re-ran the drip scenarios against the patched copy. The 20-byte drip with a 10-second cap now stops at 10.0 s (was 40.0 s). The 8-byte drip with the shipped 120-second cap now stops at 120.0 s (was 160.0 s). The deadline is now checked after every network chunk, so the overrun is bounded by the 30-second socket timeout instead of the length of the response.\n\nGate 3, bypass review: the other read in this function is the one loop; the retry sleeps in `_fetch_json` are bounded (1, 2, 4 seconds). Connection setup is bounded by the same socket timeout. A response that sends one large chunk instantly is capped by `max_bytes` as before. A drip that sends one byte every 29 seconds still takes up to the total deadline plus one socket timeout, which is the intended bound.\n\nGate 4, preserved behaviour: the function returns the same bytes for normal answers, keeps the size cap, the Content-Length check and the cut-off error. The existing fake response in the tests gained a `read1` method that delegates to `read`, so the existing unit tests exercise the same logic.\n\nGate 5, repository checks: `python3 -m pytest -q` in the copy: 411 passed, 2 skipped; the `http_fetch` unit tests (size cap, Content-Length, incomplete read, overall time limit) pass with the fake response. The drip scenarios above were run against the real socket path.",
+    "fix_pr_body": "## Summary\n\nThe 120-second total deadline in `http_fetch` was only checked between reads, and `read(64 * 1024)` blocks until 64 KB arrive. A slow server could keep one read open far past the deadline.\n\n## Change\n\nRead with `read1`, so the deadline is checked after each network chunk. The existing unit-test fake gets a matching `read1` method.",
+    "finding_class": "dynamic",
+    "agent_id": "9103d8bf",
+    "agent_name": "Feed Fetch and Cache Agent"
+  },
+  {
+    "id": "vuln-0011",
+    "title": "OSV vulnerability id with a trailing dot aborts the whole run",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:45:12 UTC",
+    "description": "The id pattern used for OSV responses accepts an identifier that ends with a dot, but the file-name check used when the id is turned into a cache path rejects it. A feed response that lists such an id raises an uncaught `ValueError` inside `fetch_osv`, which aborts `cra run` for every component. The run is recorded as an internal error and is not completed.",
+    "impact": "An on-path attacker who can serve one OSV batch response can stop every `cra run` from completing while that response is served. The tool fails safe (the run is marked incomplete and the operator is told), so no false \"nothing found\" result is produced; the impact is an availability loss for the scheduled check.",
+    "target": "cra-scan CLI, OSV batch and detail download, src/news_watcher.py",
+    "technical_analysis": "The id is validated by `VULN_ID_PATTERN`, which accepts a trailing dot:\n\n```python title=src/news_watcher.py startLineNumber=56 endLineNumber=56\nVULN_ID_PATTERN = re.compile(r\"(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}\")  # no \"..\" anywhere\n```\n\nThe id then reaches `_vuln_cache_path`, which builds the file name `osv-<id>.json` and passes it to `safe_join`. `safe_join` rejects any name that ends with a dot (`src/safe_paths.py`, `name.endswith(\".\")`), so the same id is refused with a `ValueError`. The call site in `fetch_osv` is outside every `try` block:\n\n```python title=src/news_watcher.py startLineNumber=511 endLineNumber=511\n        path = _vuln_cache_path(cache_dir, vuln_id)\n```\n\nOnly `FetchError` is caught in that loop, so the `ValueError` propagates to `collect` and `_run`. `_run` catches `Exception`, prints `RESULT INCOMPLETE - internal error (ValueError)` and saves a failed run record. The two validators agree on every other id class; the mismatch is limited to the trailing dot. Identifiers with a trailing dot do not occur in OSV data, which is why this is a robustness defect in a feed-controlled input rather than a data-integrity issue.",
+    "poc_description": "1. Serve an OSV batch response whose result for one component lists a vulnerability with id `GHSA-abcd-efgh-ijkl.` (trailing dot), with a valid modified time.\n2. Run `cra run` with an SBOM that contains that component and a valid KEV list.\n3. Observe the internal-error abort, the failed run record, and that the other components are not reported.",
+    "poc_script_code": "```python title=repro_trailing_dot.py\nimport json\nimport sys\nimport tempfile\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\nrepo = Path(sys.argv[1])\nsys.path.insert(0, str(repo))\nimport src.news_watcher as nw  # noqa: E402\n\nnow = lambda: datetime(2026, 10, 25, 12, 0, 0, tzinfo=timezone.utc)  # noqa: E731\n\n\ndef fake(url, body=None, max_bytes=0):\n    if url == nw.OSV_BATCH_URL:\n        return json.dumps({\"results\": [{\"vulns\": [{\"id\": \"GHSA-abcd-efgh-ijkl.\", \"modified\": \"2024-01-01T00:00:00Z\"}]}]}).encode()\n    raise nw.FetchError(\"unused\")\n\n\ntry:\n    print(nw.fetch_osv([\"pkg:pypi/requests@2.30.0\"], Path(tempfile.mkdtemp()), fake, lambda s: None, now)[2])\nexcept Exception as error:\n    print(\"uncaught:\", type(error).__name__, error)\n```",
+    "remediation_steps": "Make the identifier pattern match exactly what the cache-path check accepts, so that a trailing dot is rejected when the batch answer is parsed. Also catch a rejected identifier at the call site in `fetch_osv` so that a single bad identifier cannot abort the whole run.",
+    "evidence": "Unmodified source, `cra run` with one component and the saved KEV fixture:\n\n```text\nRESULT INCOMPLETE - internal error (ValueError). Do not rely on this run.\nA record of this failed run was saved; `cra status` will show it.\nexit 1\nstatus: WARNING: RESULT INCOMPLETE - the latest run was not fully successful. Do not rely on it.\n```\n\nDirect call on the unmodified source:\n\n```text\nUNCAUGHT ValueError unsafe file name\n```\n\nAfter the fix, the same response is treated as a malformed batch answer (no answer for the component), and the run reports the OSV source as `failed` with a normal message instead of an internal error:\n\n```text\n{'status': 'failed', 'detail': 'no answer from OSV and no saved answer for one component', 'purls_asked': 1}\n```",
+    "assumptions": "The attacker can answer the OSV batch request on the operator's behalf (on-path with a trusted certificate). The attacker needs no knowledge of the cache folder or the SBOM.",
+    "counterevidence": "(1) The attacker needs the on-path position described above. (2) The run fails closed: the record is saved as incomplete and the output says so, so no wrong verdict is produced. (3) `safe_join` itself is correct: it rejects the name and no file is written outside the cache. The defect is the inconsistency between the two validators, and the consequence is an availability loss for the run, which is why the rating is Low. I checked that the id cannot reach a path outside the cache folder (the rejection happens before any write).",
+    "confidence": "high",
+    "confidence_rationale": "Reproduced directly on the unmodified `fetch_osv` and through the `cra run` safety net; the on-path response is simulated.",
+    "severity_change_conditions": "If the abort were reachable without an on-path position (for example through a crafted SBOM value that the tool echoes back as an id), the rating would stay Low because the run still fails closed; a path that writes or reads outside the cache would be a separate, higher finding.",
+    "fix_effort": "trivial",
+    "cvss": 3.7,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "N",
+      "availability": "L"
+    },
+    "endpoint": "cra run (_parse_batch_result -> fetch_osv -> _vuln_cache_path -> safe_join)",
+    "method": "POST",
+    "cwe": "CWE-755",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 56,
+        "end_line": 56,
+        "label": "Reject a trailing dot in an OSV vulnerability id when the batch answer is parsed",
+        "fix_before": "VULN_ID_PATTERN = re.compile(r\"(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}\")  # no \"..\" anywhere",
+        "fix_after": "VULN_ID_PATTERN = re.compile(r\"(?!.*\\.\\.)[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?\")  # no \"..\" anywhere, no trailing dot"
+      }
+    ],
+    "fix_verification": "Gate 1, applicability: the regex change keeps the same maximum length (64 characters), keeps the single-character ids, and keeps the `..` lookahead. The original line 56 matches `fix_before`. The character class change only removes the trailing `.` case.\n\nGate 2, security closure: with the patched pattern, `GHSA-abcd-efgh-ijkl.` fails the batch-answer check, the component gets no answer, and the run reports `Source OSV: failed - no answer from OSV and no saved answer for one component` instead of an internal error. The `ValueError` can no longer arise from this id class.\n\nGate 3, bypass review: the other ways to reach `safe_join` with an unsafe name are the `..` lookahead, the slash and backslash exclusion, and the Windows device-name check; each was checked directly in the reproducer, and `safe_join` still rejects names that the pattern would now allow (for example `osv-a-.json` is allowed and is a plain name). Identifiers that differ only by a trailing dot are all rejected by the new pattern. An identifier of 64 characters ending in a letter is accepted, as before.\n\nGate 4, preserved behaviour: legitimate OSV identifiers (CVE-, GHSA-, PYSEC-, and others that do not end with a dot) are accepted unchanged; the test fixtures use only such ids.\n\nGate 5, repository checks: `python3 -m pytest -q` in the copy: 411 passed, 2 skipped, including the new parametrised case `GHSA-abcd-efgh-ijkl.` in `test_osv_invalid_vulnerability_id_is_rejected`.",
+    "fix_pr_body": "## Summary\n\nThe OSV id pattern accepted a trailing dot, but `safe_join` rejects file names ending in a dot. The resulting `ValueError` escaped `fetch_osv` and aborted the run.\n\n## Change\n\nTighten the id pattern so that a trailing dot is rejected when the batch answer is parsed. Add the trailing-dot case to the invalid-id test.",
+    "finding_class": "dynamic",
+    "agent_id": "9103d8bf",
+    "agent_name": "Feed Fetch and Cache Agent"
+  },
+  {
+    "id": "vuln-0012",
+    "title": "Concurrent run records in the same second overwrite each other",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:45:46 UTC",
+    "description": "`save_run` checks whether the run file name is free and then writes it in a separate step. Two runs that finish in the same UTC second can both see the name as free and both write it, so the later write replaces the earlier run record. In the measured case, 16 concurrent saves left one or two files on disk. A complete run can therefore replace an incomplete one in the same second, and `cra status` then shows the replacement.",
+    "impact": "Two `cra run` processes that finish in the same second (for example an overlapping scheduled job and a manual run) can lose one run record. If the surviving record is a complete run that replaced an incomplete one, `cra status` reports a complete latest run and hides the failure. The impact is limited to the operator's own run history; no remote party can trigger it.",
+    "target": "cra-scan CLI, run record folder, src/news_watcher.py (save_run)",
+    "technical_analysis": "The name check and the write are separate steps:\n\n```python title=src/news_watcher.py startLineNumber=575 endLineNumber=581\n    stamp = now().strftime(\"%Y-%m-%dT%H-%M-%SZ\")\n    path = run_dir / f\"{stamp}.json\"\n    counter = 1\n    while path.exists():\n        counter += 1\n        path = run_dir / f\"{stamp}-{counter:04d}.json\"  # zero-padded so the order stays right\n    _write_json_atomic(path, run)\n```\n\n`_write_json_atomic` finishes with `os.replace`, which overwrites an existing file. Between `path.exists()` returning False and the replace, another process can create the same name. The write is still atomic, so no partial file is seen, but the earlier record is gone. Run names have one-second resolution, so the window is the time between the check and the replace in two processes that finish in the same second.\n\nMeasured on the unmodified source: 16 threads calling `save_run` behind a barrier with a fixed time left 1, 1 and 2 run files in three repetitions, from 16 saves. With an exclusive create (`O_EXCL`) claiming the name first, the same test kept 16 of 16 files in every trial. The existing test `test_save_run_does_not_overwrite_a_run_from_the_same_second` covers only sequential saves, which is why it did not catch this.",
+    "poc_description": "1. Use a run folder that is empty.\n2. Start 16 threads that each call `save_run` with the same fixed time, released together with a barrier (two overlapping `cra run` processes that finish in the same second produce the same condition).\n3. Count the run files afterwards. On the unmodified source the count is far below 16.",
+    "poc_script_code": "```python title=repro_save_run_race.py\nimport sys\nimport tempfile\nimport threading\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\nrepo = Path(sys.argv[1])\nsys.path.insert(0, str(repo))\nimport src.news_watcher as nw  # noqa: E402\n\nruns = Path(tempfile.mkdtemp())\nfixed = datetime(2026, 10, 25, 12, 0, 0, tzinfo=timezone.utc)\nbarrier = threading.Barrier(16)\n\n\ndef saver(index):\n    barrier.wait()\n    nw.save_run(runs, {\"finished_at\": fixed.isoformat(), \"writer\": index}, lambda: fixed)\n\n\nthreads = [threading.Thread(target=saver, args=(i,)) for i in range(16)]\nfor t in threads:\n    t.start()\nfor t in threads:\n    t.join()\nprint(\"16 concurrent saves in the same second -> run files on disk:\", len(list(runs.glob(\"*.json\"))))\n```",
+    "remediation_steps": "Claim the run file name atomically before writing it, so that a second process cannot take the same name, and keep the atomic replace for the content. If the claim fails, move to the next numbered name. Add a regression test that runs concurrent saves in one second rather than only sequential ones.",
+    "evidence": "Unmodified source, three repetitions:\n\n```text\n16 concurrent saves in the same second -> run files on disk: 1\n16 concurrent saves in the same second -> run files on disk: 1\n16 concurrent saves in the same second -> run files on disk: 2\n```\n\nAfter the change, three repetitions:\n\n```text\n16 concurrent saves in the same second -> run files on disk: 16\n16 concurrent saves in the same second -> run files on disk: 16\n16 concurrent saves in the same second -> run files on disk: 16\n```",
+    "assumptions": "Two `cra run` invocations (or a run and a failed-run record) use the same run folder and finish in the same UTC second. No network or remote input is needed, and an attacker is not required; the impact depends on operator scheduling.",
+    "counterevidence": "(1) No attacker can trigger the race: the run folder and the scheduler are operator-controlled, and the threat model treats them as trusted. (2) The collision needs two runs that finish in the same UTC second, which is uncommon for a scheduled tool; the reproduction forces it with a barrier. (3) The surviving record is still a valid, atomically written file, so there is no corruption and no exposure of data. The effect is limited to losing one record in a rare overlap, which is why the rating is Low and the attack complexity is high. I did not find a control that prevents the overlap.",
+    "confidence": "high",
+    "confidence_rationale": "Reproduced on the unmodified `save_run` with real threads and the real write path; the trigger is concurrency only, with no attacker involvement.",
+    "severity_change_conditions": "A demonstrated way for a remote or low-privilege party to cause two runs to finish together, or a status path that treats a replaced record as the latest complete run in a way an attacker can exploit, would raise the rating; without that, the finding stays Low.",
+    "fix_effort": "low",
+    "cvss": 2.5,
+    "cvss_breakdown": {
+      "attack_vector": "L",
+      "attack_complexity": "H",
+      "privileges_required": "L",
+      "user_interaction": "N",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "L",
+      "availability": "N"
+    },
+    "endpoint": "cra run (save_run)",
+    "method": "N/A",
+    "cwe": "CWE-367",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 575,
+        "end_line": 581,
+        "label": "Claim the run file name with O_EXCL before writing",
+        "fix_before": "    stamp = now().strftime(\"%Y-%m-%dT%H-%M-%SZ\")\n    path = run_dir / f\"{stamp}.json\"\n    counter = 1\n    while path.exists():\n        counter += 1\n        path = run_dir / f\"{stamp}-{counter:04d}.json\"  # zero-padded so the order stays right\n    _write_json_atomic(path, run)",
+        "fix_after": "    stamp = now().strftime(\"%Y-%m-%dT%H-%M-%SZ\")\n    path = run_dir / f\"{stamp}.json\"\n    counter = 1\n    run_dir.mkdir(parents=True, exist_ok=True)\n    while True:\n        try:\n            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))\n            break\n        except FileExistsError:\n            counter += 1\n            path = run_dir / f\"{stamp}-{counter:04d}.json\"  # zero-padded so the order stays right\n    try:\n        _write_json_atomic(path, run)\n    except BaseException:\n        path.unlink(missing_ok=True)\n        raise"
+      }
+    ],
+    "fix_verification": "Gate 1, applicability: the change is limited to the body of `save_run` (the docstring, the run folder argument and the return value are unchanged). `os` is already imported in `src/news_watcher.py`. The original lines 575-581 match `fix_before`.\n\nGate 2, security closure: with the change, the 16 concurrent saves produce 16 separate files in three of three repetitions (see evidence). The name is claimed before the write, so a second process moves to the next counter value instead of replacing the first record.\n\nGate 3, bypass review: the placeholder file is created empty and is then replaced by the atomic write. A reader that loads the folder in between sees an empty file, which `_read_json` returns as unreadable and `load_runs` skips, so the status is not wrongly complete. If the write fails, the placeholder is removed and the error is raised, so no empty record is left behind. The `FileExistsError` path is the only collision path; other `OSError` values propagate as before.\n\nGate 4, preserved behaviour: the file names (`<stamp>.json`, then `<stamp>-0002.json`, ...) are unchanged, so the time order used by `load_runs` is unchanged. The existing sequential test that checks the same-second naming still applies.\n\nGate 5, repository checks: `python3 -m pytest -q` in the copy: 411 passed, 2 skipped, including `test_save_run_does_not_overwrite_a_run_from_the_same_second`. Gap: the concurrent case is verified by the reproducer above, not by a new unit test in the suite.",
+    "fix_pr_body": "## Summary\n\n`save_run` checked whether the run file name was free and then wrote it in a separate step, so two runs finishing in the same second could overwrite each other's record.\n\n## Change\n\nClaim the file name with an exclusive create before writing, and move to the next counter value on a collision. Clean up the placeholder if the write fails.",
+    "finding_class": "dynamic",
+    "agent_id": "9103d8bf",
+    "agent_name": "Feed Fetch and Cache Agent"
+  },
+  {
+    "id": "vuln-0013",
+    "title": "Run record above 20 MB is silently skipped by cra status, which then reports the previous clean run as current",
+    "severity": "low",
+    "timestamp": "2026-10-25 15:46:02 UTC",
+    "description": "cra run saves its full result, including every finding, with no size limit, but cra status silently skips any run file over its 20 MB read cap. An SBOM with many duplicate components can push the saved run past that cap, so cra status reports an older complete run as the latest run with exit code 0, even when the skipped run contains a REPORT CASE.",
+    "impact": "The status command, which is the scheduled health check, can show a false all-clear while the latest run found an affected and actively exploited component. The run command itself still prints the REPORT CASE and exits with code 3, so the loss is limited to the status view and to operators who rely on it. The effect is an incorrect integrity signal for the early-warning check, with no confidentiality or availability impact.",
+    "target": "cra CLI (local): src/news_watcher.py load_runs",
+    "technical_analysis": "save_run writes the full run dictionary, including result.findings with one entry per component and advisory, using json.dumps with indent 2 and no size check (news_watcher.py save_run and _write_json_atomic). load_runs calls _read_json for each file, and _read_json returns None when the file is larger than MAX_CACHE_FILE_BYTES (20 MB), so load_runs drops the file silently because it is not a dict. status_summary then takes the newest remaining file as last and prints Latest run: all sources ok when that older run was complete. The SBOM controls the size: duplicate component entries each produce a full set of findings for the same advisories. A live run with 1000 identical pypi django 1.0.1 components plus one maven log4j-core 2.14.1 component produced 88007 findings and a 50.5 MB run file. A 14 MB run file from a smaller SBOM (25508 findings) is still read, so the cap is reachable from a small SBOM. This is distinct from the already-filed planted-run-file finding, because the file is written by the tool itself and the defect is the silent skip.",
+    "poc_description": "1. Create a runs folder containing one older complete run with all sources ok. 2. Create an SBOM with 1000 identical CycloneDX components for pkg:pypi/django@1.0.1 and one component pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1. 3. Run cra run with that SBOM and the same runs folder; it exits with code 3 and prints REPORT CASE lines. 4. Run cra status on the runs folder; it prints Latest run: all sources ok. with exit code 0 and does not mention the REPORT CASE. 5. Reduce the SBOM so the run file is under 20 MB; the same status command then prints WARNING: the latest run found 2 REPORT CASE finding(s).",
+    "poc_script_code": "python3 -c 'import json; comps=[{\"type\":\"library\",\"name\":\"Django\",\"version\":\"1.0.1\",\"purl\":\"pkg:pypi/django@1.0.1\"} for _ in range(1000)]; comps.append({\"type\":\"library\",\"group\":\"org.apache.logging.log4j\",\"name\":\"log4j-core\",\"version\":\"2.14.1\",\"purl\":\"pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1\"}); json.dump({\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"components\":comps,\"dependencies\":[{\"ref\":\"a\"}]}, open(\"poc/sbom_big.json\",\"w\"))' && python3 -m src run --sbom poc/sbom_big.json --config poc/config.json --cache poc/cache --runs poc/runs --evidence poc/evidence > poc/big-out.txt; echo \"run exit=$?\"; python3 -m src status --runs poc/runs; echo \"status exit=$?\"",
+    "remediation_steps": "Never skip a run file silently. When a run file exists but is too large or unreadable, status must treat it as the latest run and report it as incomplete, using the file modification time as its time. Also keep saved runs within a size the reader accepts, or raise the reader limit to match the writer, so a legitimate run is not dropped.",
+    "evidence": "Local test on the same runs folder: the saved run file is 50530757 bytes with 88007 findings, report_cases 2, complete true. cra status output: Last successful run: 2026-10-25T15:32:29.845876+00:00 followed by Latest run: all sources ok. with exit code 0; the newer run file is not used. A 24 MB run file (42515 findings) gives the same false result. A 14 MB run file (25508 findings) in the same folder gives WARNING: the latest run found 2 REPORT CASE finding(s) (affected AND actively exploited). Check the 24-hour deadline. with exit code 1, which shows the size cap is the only difference. With the fix applied in the working copy, the 24 MB file is reported as WARNING: RESULT INCOMPLETE with run_file: failed - the saved run is too large to read and exit code 1.",
+    "assumptions": "An earlier complete run exists in the same runs folder, and the operator relies on cra status rather than the console output of cra run. The SBOM may come from a third party or be large in the operator's own environment.",
+    "counterevidence": "Checked: the run command itself prints REPORT CASE and exits with code 3, so interactive runs keep the signal. Checked: the scheduled use is documented as relying on status, so the risk applies to that workflow. Checked: vuln-0001 (planted run file with self-declared healthy flags) and vuln-0002 (memory use of load_runs) are different root causes; this finding is a tool-written file skipped silently. Checked: without an earlier complete run, status reports never fully successful, so the effect needs a prior healthy run. The SBOM is needed to push the file over the cap, and the operator still has to act on status. These conditions keep the severity low.",
+    "confidence": "medium",
+    "confidence_rationale": "The size dependency and the status outcome were reproduced locally with live OSV and KEV data for the findings count. The operational impact depends on how the operator schedules and reads the status command, which was not observed.",
+    "severity_change_conditions": "If the scheduled job exposes only the status exit code to an alerting system with no other review, the rating rises to Medium; if the run command output is always reviewed, it drops to informational.",
+    "fix_effort": "low",
+    "cvss": 3.1,
+    "cvss_breakdown": {
+      "attack_vector": "N",
+      "attack_complexity": "H",
+      "privileges_required": "N",
+      "user_interaction": "R",
+      "scope": "U",
+      "confidentiality": "N",
+      "integrity": "L",
+      "availability": "N"
+    },
+    "finding_class": "dynamic",
+    "agent_id": "9c17bc7b",
+    "agent_name": "SBOM Input Validation Agent",
+    "update_history": [
+      {
+        "timestamp": "2026-10-25 15:46:13 UTC",
+        "fields": [
+          "assumptions",
+          "confidence_rationale",
+          "counterevidence",
+          "description",
+          "evidence",
+          "impact",
+          "poc_description",
+          "poc_script_code",
+          "remediation_steps",
+          "severity_change_conditions",
+          "technical_analysis"
+        ],
+        "reason": "Replace placeholder text with the full write-up for the status finding.",
+        "agent_id": "9c17bc7b",
+        "agent_name": "SBOM Input Validation Agent"
+      },
+      {
+        "timestamp": "2026-10-25 15:46:25 UTC",
+        "fields": [
+          "code_locations",
+          "cwe",
+          "endpoint",
+          "fix_verification",
+          "method"
+        ],
+        "reason": "Add the CWE, endpoint and method, and attach the code location with its verified fix (patched in a working copy and tested).",
+        "agent_id": "9c17bc7b",
+        "agent_name": "SBOM Input Validation Agent"
+      }
+    ],
+    "updated_at": "2026-10-25 15:46:25 UTC",
+    "endpoint": "cra status --runs",
+    "method": "LOCAL",
+    "fix_verification": "Gate 1 security closure: in the patched copy an oversized latest run file now becomes a placeholder run with complete false and a run_file source marked failed, so status prints RESULT INCOMPLETE and exits with code 1 instead of showing the older run as all sources ok. Gate 2 bypass review: the placeholder uses the file modification time, so it sorts as the newest file as intended; unreadable but small files keep the existing behaviour, which the existing test test_a_damaged_run_file_is_ignored still checks. The remaining gap is that a run file far above the cap but still written by the tool keeps being read as failed rather than being re-read, which is the intended safe outcome. Gate 3 preserved behavior: the 14 MB run file still produces the REPORT CASE warning; the healthy runs still give all sources ok. Gate 4 how checked: executed, the status command on a 24 MB run file (now RESULT INCOMPLETE, exit 1) and on a 14 MB run file (REPORT CASE warning), plus python3 -m pytest in the working copy (412 passed, 2 skipped, including a new regression test test_an_oversized_latest_run_file_is_never_skipped). Not executed: a run through the full scheduled workflow on a real Task Scheduler host.",
+    "code_locations": [
+      {
+        "file": "src/news_watcher.py",
+        "start_line": 606,
+        "end_line": 607,
+        "label": "Treat an oversized latest run file as a failed, incomplete run instead of skipping it",
+        "fix_before": "        data = _read_json(path)\n        if isinstance(data, dict) and isinstance(data.get(\"finished_at\"), str):",
+        "fix_after": "        data = _read_json(path)\n        if data is None and path.is_file() and path.stat().st_size > MAX_CACHE_FILE_BYTES:\n            finished = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)\n            data = {\n                \"finished_at\": finished.isoformat(),\n                \"complete\": False,\n                \"sources\": {\"run_file\": {\"status\": \"failed\", \"detail\": \"the saved run is too large to read\"}},\n                \"components\": {},\n            }\n        if isinstance(data, dict) and isinstance(data.get(\"finished_at\"), str):"
+      }
+    ],
+    "cwe": "CWE-390"
+  }
+]
