@@ -628,7 +628,7 @@ def run_is_complete(run):
     return all(isinstance(s, dict) and s.get("status") == "ok" for s in sources.values())
 
 
-MAX_RUN_FILES = 1000
+MAX_RUN_TOTAL_BYTES = 200 * 1024 * 1024  # all run files together; more than this is not read (status says so)
 
 
 def _run_file_problem(detail, path, now=utc_now):
@@ -649,32 +649,63 @@ def _run_file_problem(detail, path, now=utc_now):
     }
 
 
+def _read_run_file(path):
+    """Return one run record (a dict with a readable "finished_at") for a file, or a failed stand-in. Never None."""
+    try:
+        too_large = path.stat().st_size > MAX_CACHE_FILE_BYTES
+    except OSError:
+        too_large = False
+    data = None if too_large else _read_json(path)
+    if too_large:
+        return _run_file_problem("a run record is too large to read (too large)", path)
+    if not (isinstance(data, dict) and isinstance(data.get("finished_at"), str)
+            and _parse_time(data["finished_at"]) is not None):
+        return _run_file_problem("a run record is damaged or unreadable (unreadable)", path)
+    if data.get("seal") != run_seal(data):
+        # Not written by this tool, or edited since. Keep its own time so it still counts as the latest.
+        return {**_run_file_problem("a run record has no valid seal: it was not saved by this tool or was changed "
+                                    "(not verified)", path), "finished_at": data["finished_at"]}
+    return data
+
+
 def load_runs(run_dir):
-    """Return all readable run files as a list of dicts, oldest first (by their finished_at time)."""
-    runs = []
-    paths = sorted(Path(run_dir).glob("*.json"))[-MAX_RUN_FILES:]
-    for path in paths:
+    """Return the runs `status` needs, oldest first: the newest run and the newest complete run.
+
+    Only these two are kept in memory while the folder is read (not every file), and the folder has a total
+    byte budget. Running out of budget adds a failed stand-in dated "now", so nothing dropped can look clean.
+    """
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    newest = newest_good = None  # (sort key, record)
+    spent = 0
+    over_budget = False
+    for path in sorted(Path(run_dir).glob("*.json"), reverse=True):  # newest name first; the byte budget bounds the work
         try:
             if not path.is_file():
                 continue  # a folder or a broken link named *.json is not a run record
-            too_large = path.stat().st_size > MAX_CACHE_FILE_BYTES
+            spent += path.stat().st_size
         except OSError:
-            too_large = False
-        data = None if too_large else _read_json(path)
-        if too_large:
-            data = _run_file_problem("a run record is too large to read (too large)", path)
-        elif not (isinstance(data, dict) and isinstance(data.get("finished_at"), str)
-                  and _parse_time(data["finished_at"]) is not None):
-            data = _run_file_problem("a run record is damaged or unreadable (unreadable)", path)
-        elif data.get("seal") != run_seal(data):
-            # Not written by this tool, or edited since. Keep its own time so it still counts as the latest.
-            data = {**_run_file_problem("a run record has no valid seal: it was not saved by this tool or was changed "
-                                        "(not verified)", path), "finished_at": data["finished_at"]}
-        runs.append((_parse_time(data["finished_at"]), path.stem, data))
-    # Runs whose time cannot be read sort first and are never used as "the latest".
-    epoch = datetime.min.replace(tzinfo=timezone.utc)
-    runs.sort(key=lambda item: (item[0] or epoch, item[1]))
-    return [data for _, _, data in runs]
+            spent += MAX_CACHE_FILE_BYTES  # cannot measure it: count it as a big file
+        if spent > MAX_RUN_TOTAL_BYTES:
+            over_budget = True
+            break
+        data = _read_run_file(path)
+        key = (_parse_time(data["finished_at"]) or epoch, path.stem)
+        if newest is None or key > newest[0]:
+            newest = (key, data)
+        if run_is_complete(data) and (newest_good is None or key > newest_good[0]):
+            newest_good = (key, data)
+    kept = [item for item in (newest_good, newest) if item is not None]
+    if over_budget:
+        stand_in = {
+            "finished_at": utc_now().isoformat(),
+            "complete": False,
+            "sources": {"run_file": {"status": "failed", "detail": "the runs folder is over the read budget (budget); "
+                                                                   "some run records were not read"}},
+            "components": {},
+        }
+        kept.append(((_parse_time(stand_in["finished_at"]), ""), stand_in))
+    kept = sorted({id(r): (k, r) for k, r in kept}.values(), key=lambda item: item[0])
+    return [data for _, data in kept]
 
 
 def printable(value, limit=200):
