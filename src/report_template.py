@@ -8,8 +8,9 @@ The report is plain text. Nothing here sends anything (CLAUDE.md rule 6).
 import re
 
 from src.report_facts import FactsError, LANGUAGES, render_facts, validate_facts
+from src.summary_sentences import PLACEHOLDERS
 
-PLACEHOLDERS = ("product_name", "component", "cve_id")  # the only words the AI paragraph may use in braces
+_STATUS_FIELD = re.compile(r"@(component|version|cve)")
 _PLACEHOLDER = re.compile(r"\{(" + "|".join(PLACEHOLDERS) + r")\}")
 
 MAX_PARAGRAPH_LENGTH = 1000
@@ -91,8 +92,9 @@ def status_sentence(facts, lang):
         raise FactsError("unknown language")
     validate_facts(facts)
     text = _STATUS[(lang, facts["exploited_via"])] + _WEAK_LINK.get((lang, facts["cve_matched_on"]), "") + _CLOSING[lang]
-    # plain replacement, not str.format: no brace in a fact can ever do anything
-    return text.replace("@component", facts["component"]).replace("@version", facts["version"]).replace("@cve", facts["cve_id"])
+    # one pass, not str.format and not chained replace: a fact value is never looked at again
+    values = {"component": facts["component"], "version": facts["version"], "cve": facts["cve_id"]}
+    return _STATUS_FIELD.sub(lambda match: values[match.group(1)], text)
 
 
 # The labelled lines, in order. The fact checker reads this same list, so template and checker cannot drift apart.

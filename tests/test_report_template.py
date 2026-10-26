@@ -23,7 +23,7 @@ def make(finding=None, **kwargs):
 def test_every_required_field_value_is_in_the_report(lang):
     facts, reports = make()
     rendered = rf.render_facts(facts, lang)
-    for field in rf.REQUIRED_FIELDS:
+    for field in (*rt.FIELD_LINES, "version"):
         assert rendered[field] in reports[lang], field
 
 
@@ -194,3 +194,12 @@ def test_the_renderer_refuses_wrong_input():
         rt.render_report(facts, "fr", "x")
     with pytest.raises(rf.FactsError):
         rt.render_report(facts, "en", None)
+
+
+@pytest.mark.parametrize("component", ["a@version", "x@cve", "lib@cve@version", "a@component"])
+def test_a_component_name_that_looks_like_a_status_field_is_not_rewritten(component):
+    facts = rf.build_facts(PRODUCT, kev_finding(component=component), kev_ids=KEV_IDS)
+    sentence = rt.status_sentence(facts, "en")
+    assert f"the component {component} 2.14.1 is listed as affected by CVE-2021-44228." in sentence
+    assert sentence.count(component) == 1  # the name appears once, exactly as it is
+    assert "the component" in rt.status_sentence(facts, "de") or "Komponente" in rt.status_sentence(facts, "de")

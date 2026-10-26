@@ -297,6 +297,45 @@ def _say(text, limit=1500):
         print(news_watcher.printable(line, limit))
 
 
+def _print_notes(run, args):
+    """Honest notes about what the preview did NOT check. Returns the set of CVE ids of the saved KEV list (or None)."""
+    print("Note: this preview trusts the saved run record. A human must confirm that the component really is part of the "
+          "product (the 'affected' result is not checked against the SBOM again here).")
+    if not news_watcher.run_is_complete(run):
+        print("Note: this run was INCOMPLETE (a source or a component could not be fully checked), so more cases may exist.")
+    saved_kev, kev_meta = news_watcher.load_kev_cache(args.cache, args.now)
+    if saved_kev is None:
+        print("Note: no usable saved KEV list was found, so no KEV-based case can be verified.")
+        return None
+    used = (run.get("sources") or {}).get("kev") if isinstance(run.get("sources"), dict) else None
+    used_sha = used.get("sha256") if isinstance(used, dict) else None
+    if used_sha and kev_meta and kev_meta.get("sha256") != used_sha:
+        print("Note: the saved KEV list is not the one this run used (it was updated since); cases are checked against the newer list.")
+    return news_watcher.kev_cve_ids(saved_kev)
+
+
+def _print_draft(facts, draft):
+    """Print one case. Returns the number of name fields that contain a claim word."""
+    print(f"\n=== {matcher.REPORT_CASE_LABEL}: {facts['cve_id']} in {facts['component']} {facts['version']} ===")
+    if draft.source["mode"] == "ai":
+        print("Summary written by: AI (checked by code)")
+    else:
+        print(f"Summary written by: fixed fallback text ({news_watcher.printable(draft.source['reason'], 300)})")
+    suspicious = report_facts.claim_word_warnings(facts)
+    if suspicious:
+        print(f"WARNING: {', '.join(suspicious)} contain(s) a word that reads like a statement (approved, sent, safe, fixed ...). "
+              "Check the wording of these names.")
+    if draft.reports:
+        print(f"\n--- ENGLISH --- ({PREVIEW_BANNER})")
+        _say(draft.reports["en"].rstrip("\n"))
+        print(f"\n--- DEUTSCH --- ({PREVIEW_BANNER})")
+        _say(draft.reports["de"].rstrip("\n"))
+    print(f"\nFact check: {draft.check.status}")
+    for item in draft.check.problems:
+        print(f"  - {news_watcher.printable(item, 300)}")
+    return len(suspicious)
+
+
 def _preview_report(args):
     """Phase 3: show the draft of every possible report case in a saved run. Saves nothing, sends nothing."""
     print(PREVIEW_BANNER)
@@ -306,6 +345,7 @@ def _preview_report(args):
 
 
 def _preview_body(args):
+    """0 = no case, or every shown case passed; 1 = a case cannot be shown or a check failed; 2 = input rejected."""
     run, problem = _load_sealed_run(args.run)
     if run is None:
         print(f"REJECTED: {problem}.")
@@ -322,33 +362,18 @@ def _preview_body(args):
     result = run.get("result") if isinstance(run.get("result"), dict) else {}
     findings = result.get("findings") if isinstance(result.get("findings"), list) else []
     cases = [f for f in findings if isinstance(f, dict) and f.get("action") == "REPORT_CASE"]
-    product = run.get("product")
-
-    print("Note: this preview trusts the saved run record. A human must confirm that the component really is part of the "
-          "product (the 'affected' result is not checked against the SBOM again here).")
-    if not news_watcher.run_is_complete(run):
-        print("Note: this run was INCOMPLETE (a source or a component could not be fully checked), so more cases may exist.")
-    saved_kev, kev_meta = news_watcher.load_kev_cache(args.cache, args.now)
-    kev_ids = news_watcher.kev_cve_ids(saved_kev) if saved_kev else None
-    if saved_kev is None:
-        print("Note: no usable saved KEV list was found, so no KEV-based case can be verified.")
-    else:
-        used = (run.get("sources") or {}).get("kev") if isinstance(run.get("sources"), dict) else None
-        used_sha = used.get("sha256") if isinstance(used, dict) else None
-        if used_sha and kev_meta and kev_meta.get("sha256") != used_sha:
-            print("Note: the saved KEV list is not the one this run used (it was updated since); cases are checked against the newer list.")
-
+    kev_ids = _print_notes(run, args)
     if not cases:
         print("No POSSIBLE REPORT CASE in this run.")
-        return 1
+        return 0
 
     all_ok = True
     seen = set()
-    shown = folded = skipped = 0
+    shown = folded = skipped = warnings = 0
     for finding in cases:
         name = f"{news_watcher.printable(finding.get('component'), 60)} / {news_watcher.printable(finding.get('exploited_cve'), 30)}"
         try:
-            facts = report_facts.build_facts(product, finding, kev_ids=kev_ids, evidence_dir=args.evidence)
+            facts = report_facts.build_facts(run.get("product"), finding, kev_ids=kev_ids, evidence_dir=args.evidence)
         except report_facts.FactsError as error:
             all_ok = False
             print(f"\nA possible report case in this run cannot be shown ({name}): cannot build the facts ({news_watcher.printable(str(error))}).")
@@ -370,27 +395,18 @@ def _preview_body(args):
             all_ok = False
             print(f"\nThe draft for {name} could not be written ({type(error).__name__}).")
             continue
-        print(f"\n=== {matcher.REPORT_CASE_LABEL}: {facts['cve_id']} in {facts['component']} {facts['version']} ===")
-        if draft.source["mode"] == "ai":
-            print("Summary written by: AI (checked by code)")
-        else:
-            print(f"Summary written by: fixed fallback text ({news_watcher.printable(draft.source['reason'], 300)})")
-        if draft.reports:
-            print(f"\n--- ENGLISH --- ({PREVIEW_BANNER})")
-            _say(draft.reports["en"].rstrip("\n"))
-            print(f"\n--- DEUTSCH --- ({PREVIEW_BANNER})")
-            _say(draft.reports["de"].rstrip("\n"))
-        print(f"\nFact check: {draft.check.status}")
-        for item in draft.check.problems:
-            print(f"  - {news_watcher.printable(item, 300)}")
+        warnings += _print_draft(facts, draft)
         all_ok = all_ok and draft.check.status == "PASS"
     if folded:
         print(f"\n{folded} more advisory entr{'y' if folded == 1 else 'ies'} lead to a case that is shown above (not repeated).")
     if skipped:
         print(f"\n{skipped} further case(s) were not shown (limit: {MAX_PREVIEW_CASES}).")
         all_ok = False
-    print(f"\n{shown} case(s) shown. Nothing was saved. Nothing was sent. A human decides what happens next.")
-    return 0 if all_ok and shown else 1
+    if warnings:
+        print(f"\nWARNING: {warnings} name field(s) contain a word that reads like a statement. Check the wording before relying on a draft.")
+    closing = f"{shown} case(s) shown. Nothing was saved. Nothing was sent. A human decides what happens next."
+    print("\n" + closing + (" (WARNING: check the wording of the names above.)" if warnings else ""))
+    return 0 if all_ok else 1
 
 
 def build_parser():

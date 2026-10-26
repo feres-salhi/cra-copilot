@@ -27,12 +27,6 @@ LANGUAGES = ("de", "en")
 SCHEMA = 1
 AWARENESS_WINDOW = timedelta(hours=24)  # CRA Art. 14(2)(a): early warning within 24 hours of becoming aware
 
-# The fields every early warning must show, in both languages (checked again by the fact checker).
-REQUIRED_FIELDS = (
-    "notification_type", "title", "manufacturer", "product_name", "component", "version", "cve_id",
-    "awareness", "deadline", "member_states", "evidence",
-)
-
 NOTIFICATION_TYPE_TEXT = {"de": "Schwachstelle", "en": "Vulnerability"}
 AWARENESS_PLACEHOLDER = {
     "de": "[NOCH NICHT FESTGELEGT - ein Mensch muss den Zeitpunkt bestätigen]",
@@ -185,16 +179,6 @@ def build_facts(product, finding, kev_ids, evidence_dir=None, awareness=None):
     if finding.get("action") != "REPORT_CASE" or finding.get("status") != "AFFECTED" or finding.get("exploited") is not True:
         raise FactsError("only an AFFECTED and exploited finding (REPORT_CASE) can become a report")
 
-    manufacturer = _text(product.get("manufacturer"), PRODUCT_NAME_PATTERN, "manufacturer")
-    product_name = _text(product.get("product_name"), PRODUCT_NAME_PATTERN, "product name")
-    states = product.get("member_states")
-    if (not isinstance(states, list) or not states or len(states) > MAX_STATES
-            or not all(isinstance(s, str) and s in EU_MEMBER_STATES for s in states) or len(set(states)) != len(states)):
-        raise FactsError("member_states must be a non-empty list of different EU country codes")
-
-    component = _text(finding.get("component"), NAME_PATTERN, "component name")
-    version = _text(finding.get("version"), VERSION_PATTERN, "component version")
-
     # The CVE id is the one that matched KEV / the evidence file. Advisory ids and texts are never used.
     cve_id = finding.get("exploited_cve")
     if not isinstance(cve_id, str) or not CVE_PATTERN.fullmatch(cve_id):
@@ -202,10 +186,6 @@ def build_facts(product, finding, kev_ids, evidence_dir=None, awareness=None):
     listed = finding.get("cve_ids")
     if not isinstance(listed, list) or cve_id not in listed:
         raise FactsError("the exploited CVE id is not one of the finding's CVE ids")
-    matched_on = finding.get("exploited_cve_matched_on")
-    if matched_on not in ("id", "alias", "upstream"):
-        raise FactsError("it is not known where the CVE link came from")
-
     evidence = _evidence(finding, cve_id, kev_ids, evidence_dir)
 
     awareness_utc = deadline_utc = None
@@ -219,22 +199,26 @@ def build_facts(product, finding, kev_ids, evidence_dir=None, awareness=None):
             raise FactsError("the awareness time is outside the supported calendar") from error
         awareness_utc = awareness_utc.isoformat()
 
+    states = product.get("member_states")
     facts = {
         "schema": SCHEMA,
         "notification_type": "vulnerability",
-        "manufacturer": manufacturer,
-        "product_name": product_name,
-        "member_states": list(states),
-        "component": component,
-        "version": version,
+        "manufacturer": product.get("manufacturer"),
+        "product_name": product.get("product_name"),
+        "member_states": list(states) if isinstance(states, list) else states,
+        "component": finding.get("component"),
+        "version": finding.get("version"),
         "cve_id": cve_id,
-        "cve_matched_on": matched_on,
-        "exploited_via": finding["exploited_via"],
+        "cve_matched_on": finding.get("exploited_cve_matched_on"),
+        "exploited_via": finding.get("exploited_via"),
         "evidence": evidence,
         "awareness_time_utc": awareness_utc,
         "deadline_utc": deadline_utc,
-        "title": _titles(product_name, component, version, cve_id),
+        "title": None,
     }
+    if all(isinstance(facts[k], str) for k in ("product_name", "component", "version")):
+        facts["title"] = _titles(facts["product_name"], facts["component"], facts["version"], cve_id)
+    # Every other check (names, versions, states, link, times, title ...) lives in validate_facts, in ONE place.
     validate_facts(facts)
     return facts
 
@@ -282,3 +266,30 @@ def validate_facts(facts):
             raise FactsError("the deadline is not exactly 24 hours after the awareness time (stored in UTC)")
     if facts["title"] != _titles(facts["product_name"], facts["component"], facts["version"], facts["cve_id"]):
         raise FactsError("the title does not match the facts")
+
+
+# Words that make a *name* read like a statement about the case. A real product may be called "SafeGuard Router", so a name
+# is never refused for this; the preview only warns, so a human looks at the wording.
+_CLAIM_WORDS = re.compile(
+    r"approved|sent|submitted|reported|safe|secure|fixed|patched|critical|harmless|unaffected|not affected|"
+    r"evidence file|exploited|enisa|csirt|"
+    r"freigegeben|gesendet|gemeldet|sicher|behoben|kritisch|harmlos|nicht betroffen|unbetroffen|ausgenutzt"
+)
+_CVE_IN_NAME = re.compile(r"cve[ -]?\d{4}")
+_LOOK_ALIKE_DIGITS = str.maketrans("013457@$", "oieastas")
+
+
+def claim_word_warnings(facts):
+    """[field names] whose text reads like a statement (approved, sent, safe, not affected, a CVE id ...).
+
+    Blanks, hyphens, upper case and simple digit-for-letter swaps (N0t Affected, Appr0ved) are ignored when matching.
+    """
+    found = []
+    for name in ("manufacturer", "product_name", "component", "version"):
+        value = facts.get(name)
+        if not isinstance(value, str):
+            continue
+        plain = " ".join(re.sub(r"[-_]+", " ", value.lower().translate(_LOOK_ALIKE_DIGITS)).split())
+        if _CLAIM_WORDS.search(plain) or _CVE_IN_NAME.search(value.lower()):
+            found.append(name)
+    return found
