@@ -38,7 +38,7 @@ def load_env_file(path):
         name, value = name.strip(), value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        if not _NAME.fullmatch(name) or len(value) > MAX_VALUE_LENGTH or not value.isprintable() and value:
+        if not _NAME.fullmatch(name) or len(value) > MAX_VALUE_LENGTH or (value and not value.isprintable()):
             continue
         values[name] = value
     return values

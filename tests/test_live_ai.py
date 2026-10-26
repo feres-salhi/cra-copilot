@@ -38,7 +38,7 @@ def test_the_real_gemini_answer_alone_passes_the_fact_checker_otherwise_tell_me_
     """If this fails, the AI wording is rejected by the rules (not a bug): read the problems and adjust the prompt."""
     ai = rw.make_gemini_ai()
     paragraphs = {lang: ai(rw.build_prompt(lang, "kev")).strip() for lang in rf.LANGUAGES}
-    result = fc.check_paragraphs(paragraphs)
+    result = fc.check_paragraphs(paragraphs, "kev")
     with capsys.disabled():
         print()
         print(paragraphs)

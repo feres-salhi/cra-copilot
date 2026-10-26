@@ -108,6 +108,7 @@ Every check gives one of three answers: **AFFECTED**, **NOT_AFFECTED** or **UNKN
   - Only the three allowed placeholders, the **same set in German and English**, no stray braces.
   - **Forbidden words (German and English), no exceptions in v1:** not affected / nicht betroffen, fixed / behoben / patched, critical / kritisch, CVSS, %, safe / sicher, all versions / alle Versionen, number words, month names.
 - **Pass 2, on the finished report** after code fills in the placeholders: every ID, version, date and link must be in `facts.json`, and every required field must be there in both languages.
+- **Changed in Phase 3 (team review, 2026-10-26):** the forbidden-word list above did not hold up (a false claim written in other words passed, and so did one written only in "allowed" words). Pass 1 now accepts the AI paragraph only if it is made of **approved whole sentences** (`src/summary_sentences.py`), written exactly. This replaces the character, digit, placeholder and forbidden-word rules of pass 1, because the approved sentences contain none of those problems by construction. Pass 2 is: length and character guard, "the finished report is exactly what the template writes from `facts.json`", and "the summary line is made of approved sentences". See QUESTIONS.md P1.
 - Output: `cases/<id>/draft.md`, `facts.json` and `check.json` with status **PENDING**. Plain text/markdown, never shown as a web page.
 
 ### Part 5 — Human approval (`cra draft` / `cra approve`)
@@ -309,3 +310,17 @@ Things the tool does **not** protect against in version 1. The README must say t
 2. **Run records are not signed (S7).** Each run record has a "seal", which is only a fingerprint of its content. It catches a file edited by hand or a fake file, but anyone who reads the code can compute it. **Anyone who can write files on this computer is trusted.** A key stored on the same computer would not stop that person, so signing was not built.
 3. **Partial fix of vuln-0001 (a planted run file).** Only the seal described above exists. A determined person with write access to the `runs/` folder can still forge a record. Run records made before the seal existed show as "not verified".
 4. **Partial fix of vuln-0007 (KEV ids that disappear).** If the new KEV list lacks ids the saved copy had, KEV becomes stale, the run is INCOMPLETE, and the saved copy is kept. A human can accept a real removal with `cra kev accept-removals` (decision S2: the human types "yes" and a name; it is logged in `cache/kev/accepted-removals.log`). This does **not** detect the cases in limit 1.
+
+---
+
+## (i) Phase 4 must-do list (from the Phase 3 team review, 2026-10-26)
+
+These came out of the end-of-phase meeting (security architect, penetration tester, code reviewer). None of them is built in Phase 3. **Each one must be settled before any send path or approval step is written.**
+
+1. **Awareness time against machine-observed times.** `cra draft` must store the times the tool itself observed (the run time, when the KEV list was saved, the KEV `dateAdded`) next to the time a human types. It must refuse (or ask for a typed reason) when the human awareness time is *later* than the first machine observation, and it must reject awareness times in the future. A deadline calculated from "now" would otherwise be silently late.
+2. **Approval regenerates the wording.** `cra approve` must rebuild the heading and footer from code (they say "NOT APPROVED, NOT SENT" today), re-run `check_reports` on the approved bytes, and make the human re-confirm the product and component values on the screen.
+3. **Re-derive "affected" from the SBOM.** The run record is only sealed with an unkeyed fingerprint (decision S7). `cra draft` must re-run the matcher on the SBOM and the saved data and require the same finding, and store the SBOM fingerprint in the facts. Until then the preview says that "affected" is not checked again.
+4. **Show more KEV details in the draft** (the KEV `dateAdded`, the time the list was saved, the vendor and product of the entry), so a human can compare them with the CISA website in 30 seconds (decision S3: the list itself is not authenticated).
+5. **Plain text only** for every export or e-mail (QUESTIONS.md P6).
+6. **Names that read like statements.** The preview warns when a product, manufacturer, component or version text contains a word such as "approved" or "sent". `cra approve` must show the same warning.
+

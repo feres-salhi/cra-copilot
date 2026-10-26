@@ -7,6 +7,7 @@ import pytest
 
 from src import news_watcher as nw
 from src import report_facts as rf
+from src import report_template as rt
 from tests.test_cli_run import NOW, run_cli, saved_run
 
 UTC = timezone.utc
@@ -300,7 +301,7 @@ def test_render_facts_gives_every_required_field_in_both_languages():
     facts = build(kev_finding())
     for lang in ("de", "en"):
         rendered = rf.render_facts(facts, lang)
-        assert set(rendered) == set(rf.REQUIRED_FIELDS)
+        assert set(rendered) == set(rt.FIELD_LINES) | {"version"}
         assert all(isinstance(v, str) and v for v in rendered.values())
     assert rf.render_facts(facts, "en")["notification_type"] == "Vulnerability"
     assert rf.render_facts(facts, "de")["notification_type"] == "Schwachstelle"
