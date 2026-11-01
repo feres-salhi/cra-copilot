@@ -763,6 +763,28 @@ def save_run(run_dir, run, now=utc_now):
     return path
 
 
+def read_sealed_run(path):
+    """(run record, None) or (None, reason). A record without a valid seal is not trusted (see `run_seal`)."""
+    try:
+        if not Path(path).is_file():  # a missing file, a folder, or a device such as CON or a pipe: never opened
+            return None, "the run file cannot be read"
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_CACHE_FILE_BYTES + 1)
+    except OSError:
+        return None, "the run file cannot be read"
+    if len(raw) > MAX_CACHE_FILE_BYTES:
+        return None, "the run file is too large"
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return None, "the run file is not valid JSON"
+    if not isinstance(data, dict):
+        return None, "the run file is not a run record"
+    if data.get("seal") != run_seal(data):
+        return None, "the run file has no valid seal: it was not saved by this tool or was changed"
+    return data, None
+
+
 def run_is_complete(run):
     """True only if the run said it was complete AND every download source was ok.
 
