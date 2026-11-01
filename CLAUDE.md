@@ -58,6 +58,14 @@ Fares is a beginner. For every step:
 
 \- src/fact\_checker.py  — part 4: code checks every fact in the draft
 
+\- src/report\_facts.py — part 4: builds the facts of one case, one shared formatter for dates and text
+
+\- src/report\_template.py — part 4: the fixed German and English early-warning template
+
+\- src/summary\_sentences.py — part 4: the approved whole sentences the AI may choose from
+
+\- src/env\_loader.py — reads the .env file (the key is kept in a Secret box)
+
 \- tests/               — automatic tests (pytest) for every part
 
 \- demo-data/           — fake example products only

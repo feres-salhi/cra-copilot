@@ -560,3 +560,10 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **Known limit:** the key is still readable by code that calls `reveal()` (it has to be), and a plain `GEMINI_API_KEY` stays in the normal process environment. Only tracebacks, logs, messages and reprs are protected.
 - **Tests (real numbers, `env -u CRA_LIVE_AI`, offline):** full suite **995 passed, 5 skipped, 0 failed** (was 977 passed). New: `tests/test_key_never_leaks.py` (10 tests; 7 fail on the old code, the other 3 are the positive-control and live-test-message checks) plus new tests in `test_env_loader.py` and `test_report_writer.py`. They include a child pytest run with `-l -vv --tb=long` and a real failed connection to localhost (no outside network).
 - **Process slip, honest note:** `CRA_LIVE_AI=1` is set in my shell, so two of my test runs executed the optional live test and made real Gemini calls (answers: HTTP 429 and 503; the key did not appear in the output). This broke the "no real Gemini call" rule. All later runs used `env -u CRA_LIVE_AI`. You may want to remove that variable from your shell profile.
+
+### Live test of the AI and Phase 4 start-up (2026-11-02)
+- **First real Gemini call: PASSED.** Mode "ai", fact check PASS, model `gemini-3.5-flash` (screenshot 07).
+- **Later calls hit HTTP 429** (the free tier's rate limit). The preview correctly used the fixed fallback text and said so.
+- **Fares found a bug in the live test: the API key could leak in a traceback.** It was fixed in commit 514a1fe, with 10 regression tests (screenshot 08). The old key counts as burned.
+- **Decision P1 (Fares, 2026-11-02):** keep the "AI chooses from approved sentences" design.
+- CLAUDE.md folder list updated with the new Phase 3 files (nothing else in CLAUDE.md was changed).
