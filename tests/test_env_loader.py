@@ -73,13 +73,14 @@ def test_a_real_environment_variable_wins_over_the_file():
 
 @pytest.mark.parametrize("key", ["AIza" + "x" * 35, "a-b_c" * 6])
 def test_a_plausible_api_key_is_accepted(key):
-    assert el.valid_api_key(key)
+    assert el.valid_api_key(el.Secret(key))
+    assert not el.valid_api_key(key)  # a plain string is never accepted: keys travel boxed
 
 
 @pytest.mark.parametrize("key", [None, "", "short", "put-your-key-here", "has space " + "x" * 30, "x" * 30 + "\n",
                                  "x" * 30 + "\r\nX-Evil: 1", "x" * 300, 5, b"x" * 30])
 def test_a_bad_api_key_is_refused(key):
-    assert not el.valid_api_key(key)
+    assert not el.valid_api_key(el.Secret(key) if isinstance(key, str) else key)
 
 
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-pro", "a.b-c_d"])
@@ -90,3 +91,43 @@ def test_a_plausible_model_name_is_accepted(model):
 @pytest.mark.parametrize("model", [None, "", "a/b", "a b", "a:generate", "a?x=1", "a\n", "../x", "x" * 100, 5])
 def test_a_model_name_that_could_change_the_web_address_is_refused(model):
     assert not el.valid_model_name(model)
+
+
+# ------------------------------------------------------------------ the Secret box (the key must never be printed)
+
+KEY = "AIzaSyFAKE-KEY-FOR-TESTS-0123456789abcdef"
+
+
+def test_a_secret_never_shows_its_value_in_any_text_form():
+    import copy
+    import json
+    import logging
+    import pickle
+    box = el.Secret(KEY)
+    for shown in (str(box), repr(box), f"{box}", "%s" % box, "%r" % box, format(box, ">40"), repr([box]), repr({"k": box}),
+                  repr((box,)), str({"x-goog-api-key": box})):
+        assert KEY not in shown and "***" in shown
+    with pytest.raises(TypeError):
+        pickle.dumps(box)
+    with pytest.raises(TypeError):
+        copy.copy(box)
+    with pytest.raises(TypeError):
+        json.dumps(box)
+    logging.getLogger("cra-test").warning("key=%s", box)  # must not raise; the value can never be formatted in
+    assert box.reveal() == KEY
+    with pytest.raises(AttributeError):
+        box._value = "other"
+    with pytest.raises(AttributeError):
+        box.other = 1
+    with pytest.raises(TypeError):
+        el.Secret(5)
+
+
+def test_a_secret_equals_only_another_secret_never_a_plain_string():
+    assert el.Secret(KEY) == el.Secret(KEY) and el.Secret(KEY) != KEY and el.Secret(KEY) != el.Secret(KEY + "x")
+
+
+def test_get_secret_returns_a_box_or_nothing():
+    box = el.get_secret("GEMINI_API_KEY", {}, {"GEMINI_API_KEY": " " + KEY + " "})
+    assert isinstance(box, el.Secret) and box.reveal() == KEY and KEY not in repr(box)
+    assert el.get_secret("GEMINI_API_KEY", {}, {}) is None

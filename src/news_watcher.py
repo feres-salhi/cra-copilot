@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from src.env_loader import Secret
 from src.safe_paths import safe_join
 
 # Fixed HTTPS addresses (never built from SBOM text).
@@ -53,6 +54,7 @@ MAX_DETAIL_REQUESTS = 3000  # at most this many vulnerability records are downlo
 MAX_VERSIONS_PER_ENTRY = 20_000
 
 _HEADER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,63}")
+_PLAIN_HEADERS = {"accept", "accept-language"}  # only these may be plain text; EVERY other header value must be a Secret
 _FORBIDDEN_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "content-type", "user-agent"}
 CVE_PATTERN = re.compile(r"CVE-[0-9]{4}-[0-9]{4,12}")
 # Vulnerability IDs go into file names, so they must match a strict pattern first.
@@ -93,6 +95,18 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         raise FetchError(f"refusing to follow a redirect (HTTP {code})", code)
 
 
+def _header_ok(name, value):
+    """A header is fine if its name is plain and its value is one printable ASCII line. A header that carries a key
+    (any header except a short allowlist) must come as a Secret: a plain string would show up in tracebacks."""
+    if not (isinstance(name, str) and _HEADER_NAME.fullmatch(name) and name.lower() not in _FORBIDDEN_HEADERS):
+        return False
+    if isinstance(value, Secret):
+        value = value.reveal()
+    elif name.lower() not in _PLAIN_HEADERS:
+        return False
+    return isinstance(value, str) and value.isprintable() and value.isascii()
+
+
 def http_fetch(url, body=None, max_bytes=MAX_OSV_VULN_BYTES, headers=None, allowed_hosts=None):
     """Download `url` (POST when `body` is given). Returns the bytes of a 200 answer.
 
@@ -113,18 +127,17 @@ def http_fetch(url, body=None, max_bytes=MAX_OSV_VULN_BYTES, headers=None, allow
     if parsed.scheme != "https" or parsed.hostname not in hosts or port not in (None, 443):
         raise FetchError("address is not on the allowed list")
     if headers is not None:
-        if not isinstance(headers, dict) or not all(
-                isinstance(k, str) and isinstance(v, str) and _HEADER_NAME.fullmatch(k) and v.isprintable() and v.isascii()
-                and k.lower() not in _FORBIDDEN_HEADERS for k, v in headers.items()):
+        if not isinstance(headers, dict) or not all(_header_ok(k, v) for k, v in headers.items()):
             raise FetchError("a request header is not valid")
     request = urllib.request.Request(url, data=body, method="POST" if body is not None else "GET")
     request.add_header("User-Agent", "cra-copilot (student project)")
     if body is not None:
         request.add_header("Content-Type", "application/json")
     for key, value in (headers or {}).items():
-        request.add_header(key, value)
+        request.add_header(key, value.reveal() if isinstance(value, Secret) else value)  # the key is unboxed only here, for the request header
     opener = urllib.request.build_opener(_NoRedirects)
     deadline = time.monotonic() + TOTAL_SECONDS
+    failure = None  # (message, status): kept as plain text so the real error (and its frames) can be dropped
     try:
         with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             expected = response.headers.get("Content-Length")
@@ -141,12 +154,16 @@ def http_fetch(url, body=None, max_bytes=MAX_OSV_VULN_BYTES, headers=None, allow
                 if size > max_bytes:
                     raise FetchError("answer is larger than the size cap")
                 chunks.append(chunk)
-    except FetchError:
-        raise
+    except FetchError as error:
+        failure = (str(error), error.status)
     except urllib.error.HTTPError as error:
-        raise FetchError(f"HTTP {error.code}", error.code) from error
+        failure = (f"HTTP {error.code}", error.code)
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
-        raise FetchError(f"network problem: {type(error).__name__}") from error
+        failure = (f"network problem: {type(error).__name__}", None)
+    if failure is not None:
+        # Raised OUTSIDE the except block, so there is no chained error: the urllib / http.client frames hold the
+        # request headers (the API key as plain text) in their locals, and pytest -l / -vv would print them.
+        raise FetchError(*failure) from None
     if expected is not None and expected.isdigit() and int(expected) != size:
         raise FetchError("answer is shorter than announced (cut off)")
     return b"".join(chunks)
