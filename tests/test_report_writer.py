@@ -9,6 +9,7 @@ import json
 import pytest
 
 from src import fact_checker as fc
+from src.env_loader import Secret
 from src import news_watcher as nw
 from src import report_facts as rf
 from src import report_writer as rw
@@ -222,11 +223,12 @@ def gemini_answer(text="A summary.", finish="STOP"):
 
 def test_gemini_is_called_over_https_with_the_key_in_a_header_not_in_the_address():
     net = FakeNetwork(gemini_answer("Hello there."))
-    assert rw.gemini_generate("PROMPT", SECRET, "gemini-2.5-flash", net) == "Hello there."
+    assert rw.gemini_generate("PROMPT", Secret(SECRET), "gemini-2.5-flash", net) == "Hello there."
     call = net.calls[0]
     assert call["url"] == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
     assert SECRET not in call["url"] and SECRET not in call["body"].decode()
-    assert call["headers"] == {"x-goog-api-key": SECRET}
+    assert call["headers"] == {"x-goog-api-key": Secret(SECRET)}
+    assert SECRET not in repr(call["headers"]) and SECRET not in str(call["headers"])
     assert call["allowed_hosts"] == rw.REPORT_ALLOWED_HOSTS == {"generativelanguage.googleapis.com"}
     assert json.loads(call["body"])["contents"][0]["parts"][0]["text"] == "PROMPT"
     assert call["max_bytes"] == rw.MAX_AI_ANSWER_BYTES
@@ -234,10 +236,10 @@ def test_gemini_is_called_over_https_with_the_key_in_a_header_not_in_the_address
 
 def test_several_text_parts_are_joined_and_an_unfinished_answer_is_refused():
     parts = json.dumps({"candidates": [{"content": {"parts": [{"text": "One "}, {"text": "two."}]}, "finishReason": "STOP"}]}).encode()
-    assert rw.gemini_generate("p", SECRET, "m", FakeNetwork(parts)) == "One two."
+    assert rw.gemini_generate("p", Secret(SECRET), "m", FakeNetwork(parts)) == "One two."
     for bad_finish in ("MAX_TOKENS", "SAFETY", "RECITATION", None):
         with pytest.raises(ValueError):
-            rw.gemini_generate("p", SECRET, "m", FakeNetwork(gemini_answer(finish=bad_finish)))
+            rw.gemini_generate("p", Secret(SECRET), "m", FakeNetwork(gemini_answer(finish=bad_finish)))
 
 
 @pytest.mark.parametrize("answer", [
@@ -249,12 +251,12 @@ def test_several_text_parts_are_joined_and_an_unfinished_answer_is_refused():
 ])
 def test_an_odd_gemini_answer_raises_a_value_error_never_something_else(answer):
     with pytest.raises(ValueError):
-        rw.gemini_generate("p", SECRET, "m", FakeNetwork(answer))
+        rw.gemini_generate("p", Secret(SECRET), "m", FakeNetwork(answer))
 
 
 def test_a_network_error_passes_through_without_the_key():
     with pytest.raises(nw.FetchError) as caught:
-        rw.gemini_generate("p", SECRET, "m", FakeNetwork(error=nw.FetchError("HTTP 403", 403)))
+        rw.gemini_generate("p", Secret(SECRET), "m", FakeNetwork(error=nw.FetchError("HTTP 403", 403)))
     assert SECRET not in str(caught.value) and SECRET not in repr(caught.value)
 
 
@@ -262,21 +264,28 @@ def test_a_network_error_passes_through_without_the_key():
 def test_a_bad_key_is_refused_before_any_network_call_and_never_echoed(key):
     net = FakeNetwork(gemini_answer())
     with pytest.raises(ValueError) as caught:
-        rw.gemini_generate("p", key, "m", net)
+        rw.gemini_generate("p", Secret(key) if isinstance(key, str) else key, "m", net)
     assert net.calls == [] and (key is None or key.strip() == "" or key not in str(caught.value))
+
+
+def test_a_plain_string_key_is_refused_it_must_come_boxed_as_a_secret():
+    net = FakeNetwork(gemini_answer())
+    with pytest.raises(ValueError) as caught:
+        rw.gemini_generate("p", SECRET, "m", net)
+    assert net.calls == [] and SECRET not in str(caught.value)
 
 
 @pytest.mark.parametrize("model", ["", "a/b", "a b", "a?x=1", "../x", None])
 def test_a_bad_model_name_is_refused_before_any_network_call(model):
     net = FakeNetwork(gemini_answer())
     with pytest.raises(ValueError):
-        rw.gemini_generate("p", SECRET, model, net)
+        rw.gemini_generate("p", Secret(SECRET), model, net)
     assert net.calls == []
 
 
 def request_body_for(model):
     net = FakeNetwork(gemini_answer("ok."))
-    rw.gemini_generate("p", SECRET, model, net)
+    rw.gemini_generate("p", Secret(SECRET), model, net)
     return json.loads(net.calls[0]["body"])
 
 
@@ -287,8 +296,15 @@ def test_flash_models_get_the_thinking_budget_off_and_a_roomy_output_limit_other
     assert "thinkingConfig" not in request_body_for("gemini-2.5-pro")["generationConfig"]
 
 
+def test_the_default_model_gets_no_thinking_setting_and_a_bigger_output_limit():
+    config = request_body_for(rw.DEFAULT_MODEL)["generationConfig"]
+    assert "thinkingConfig" not in config and config["maxOutputTokens"] == rw.MAX_OUTPUT_TOKENS_WITH_THINKING == 8192
+    for model in ("gemini-3-flash", "gemini-3.5-pro", "gemini-flash-latest"):
+        assert "thinkingConfig" not in request_body_for(model)["generationConfig"]
+
+
 def test_the_default_model_and_the_settings_come_from_the_environment_or_the_env_file(tmp_path):
-    assert rw.DEFAULT_MODEL == "gemini-2.5-flash"
+    assert rw.DEFAULT_MODEL == "gemini-3.5-flash"
     env_file = tmp_path / ".env"
     env_file.write_text(f"GEMINI_API_KEY={SECRET}\nGEMINI_MODEL=gemini-test-model\n", encoding="utf-8")
     net = FakeNetwork(gemini_answer("ok."))
@@ -296,7 +312,7 @@ def test_the_default_model_and_the_settings_come_from_the_environment_or_the_env
     assert net.calls[0]["url"].endswith("/models/gemini-test-model:generateContent")
     net2 = FakeNetwork(gemini_answer("ok."))  # a real environment variable beats the file; without GEMINI_MODEL the default is used
     rw.make_gemini_ai(env_path=tmp_path / "none", environ={"GEMINI_API_KEY": SECRET}, fetch=net2)("P")
-    assert net2.calls[0]["url"].endswith("/models/gemini-2.5-flash:generateContent")
+    assert net2.calls[0]["url"].endswith("/models/gemini-3.5-flash:generateContent")
 
 
 def test_without_a_key_there_is_no_ai_and_the_message_says_where_to_put_it(tmp_path):
@@ -369,7 +385,7 @@ def test_http_fetch_still_refuses_the_gemini_host_by_default_so_the_news_watcher
 def test_http_fetch_accepts_an_own_host_list_and_extra_headers(monkeypatch):
     recorder = Recorder(b'{"ok": 1}')
     patch_opener(monkeypatch, recorder)
-    assert nw.http_fetch(GEMINI_URL, b"{}", 1000, headers={"x-goog-api-key": SECRET}, allowed_hosts=GEMINI_ONLY) == b'{"ok": 1}'
+    assert nw.http_fetch(GEMINI_URL, b"{}", 1000, headers={"x-goog-api-key": Secret(SECRET)}, allowed_hosts=GEMINI_ONLY) == b'{"ok": 1}'
     request = recorder.requests[0]
     assert request.get_header("X-goog-api-key") == SECRET and request.get_method() == "POST"
 
@@ -385,6 +401,7 @@ def test_with_an_own_host_list_the_other_hosts_are_refused(monkeypatch):
 @pytest.mark.parametrize("headers", [
     {"x-goog-api-key": "a\nb"}, {"x-goog-api-key": "a\rb"}, {"bad name": "x"}, {"x\n": "y"}, {"x-goog-api-key": 5}, "x-goog-api-key: y",
     {"x-goog-api-key": "caf" + chr(0xE9)}, {"x-goog-api-key": chr(0x20AC) + "-key"}, {"Host": "evil.example"}, {"host": "evil.example"},
+    {"x-goog-api-key": Secret("a\nb")}, {"x-goog-api-key": SECRET}, {"Authorization": "Bearer " + SECRET},  # a key header must be a Secret
     {"Content-Length": "5"}, {"Transfer-Encoding": "chunked"}, {"Connection": "close"}, {"Content-Type": "text/plain"}, {"User-Agent": "x"},
 ])
 def test_bad_headers_and_request_framing_headers_are_refused(monkeypatch, headers):
@@ -396,7 +413,8 @@ def test_bad_headers_and_request_framing_headers_are_refused(monkeypatch, header
 def test_a_refused_header_value_never_appears_in_the_error_message(monkeypatch):
     patch_opener(monkeypatch, Recorder())
     leak = "SECRETHEADERVALUE-" + "x" * 30
-    for headers in ({"x-goog-api-key": leak + "\n"}, {"x-goog-api-key": leak + chr(0xE9)}, {"Host": leak}, {"bad name": leak}):
+    for headers in ({"x-goog-api-key": Secret(leak + "\n")}, {"x-goog-api-key": leak}, {"x-goog-api-key": leak + "\n"},
+                    {"x-goog-api-key": leak + chr(0xE9)}, {"Host": leak}, {"bad name": leak}):
         with pytest.raises(nw.FetchError) as caught:
             nw.http_fetch(GEMINI_URL, b"{}", 1000, headers=headers, allowed_hosts=GEMINI_ONLY)
         assert leak not in str(caught.value) and leak not in repr(caught.value)

@@ -10,6 +10,7 @@ paragraph (all approved sentences that apply) is used and the draft says so. Not
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,9 +23,11 @@ from src.report_facts import LANGUAGES, validate_facts
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GEMINI_HOST = "generativelanguage.googleapis.com"
 REPORT_ALLOWED_HOSTS = {GEMINI_HOST}  # the report writer may reach this host only; the news watcher cannot
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 MAX_AI_ANSWER_BYTES = 1024 * 1024
-MAX_OUTPUT_TOKENS = 2048  # Gemini 2.5 counts its hidden thinking against this limit
+MAX_OUTPUT_TOKENS = 2048  # Gemini 2.5 counts its hidden thinking against this limit (we switch thinking off there)
+MAX_OUTPUT_TOKENS_WITH_THINKING = 8192  # models where we cannot switch thinking off need room for it
+_THINKING_BUDGET_MODELS = re.compile(r"gemini-2\.5-flash")  # the family where `thinkingBudget: 0` is documented
 
 _LANGUAGE_NAME = {"de": "German (Deutsch)", "en": "English"}
 
@@ -63,15 +66,19 @@ def build_prompt(lang, exploited_via):
 
 
 def _generation_config(model):
-    config = {"temperature": 0.2, "maxOutputTokens": MAX_OUTPUT_TOKENS}
-    if "flash" in model:  # Flash models may switch the hidden thinking off; Pro models cannot (not verified: live test)
-        config["thinkingConfig"] = {"thinkingBudget": 0}
-    return config
+    """`thinkingBudget: 0` (switch the hidden thinking off) is documented only for the Gemini 2.5 Flash family, so it is
+    sent only there. Newer models (such as gemini-3.5-flash) use a different thinking setting and some cannot switch
+    thinking off, so for them we send NO thinking setting (a wrong one could make Google refuse the whole request)
+    and give the answer a bigger limit, because hidden thinking counts against it. Not verified live (no real call)."""
+    if _THINKING_BUDGET_MODELS.match(model):
+        return {"temperature": 0.2, "maxOutputTokens": MAX_OUTPUT_TOKENS, "thinkingConfig": {"thinkingBudget": 0}}
+    return {"temperature": 0.2, "maxOutputTokens": MAX_OUTPUT_TOKENS_WITH_THINKING}
 
 
 def gemini_generate(prompt, api_key, model, fetch=http_fetch):
     """Ask Google Gemini (plain https, no extra package). Returns the answer text or raises.
 
+    `api_key` must be a `Secret` (a plain string is refused): the box prints as "***" in tracebacks, logs and messages.
     The key travels in a request header, never in the web address, and no error message ever repeats it.
     The model name is checked first because it becomes part of the web address.
     """
@@ -101,14 +108,22 @@ def gemini_generate(prompt, api_key, model, fetch=http_fetch):
     return "".join(texts)
 
 
-def make_gemini_ai(env_path=None, environ=None, fetch=None):
-    """Read GEMINI_API_KEY and GEMINI_MODEL (the environment wins over .env) and return ai(prompt) -> text."""
+def _read_settings(env_path, environ):
+    """(Secret key or None, model text). The key is boxed here and the mappings that hold it as plain text stay in this
+    small function, which does not raise for normal input: no failing frame will ever show them."""
     file_values = env_loader.load_env_file(env_path if env_path is not None else PROJECT_ROOT / ".env")
     environ = os.environ if environ is None else environ
-    key = env_loader.get_setting("GEMINI_API_KEY", file_values, environ)
+    key = env_loader.get_secret("GEMINI_API_KEY", file_values, environ)
+    model = env_loader.get_setting("GEMINI_MODEL", file_values, environ, DEFAULT_MODEL)
+    return key, model
+
+
+def make_gemini_ai(env_path=None, environ=None, fetch=None):
+    """Read GEMINI_API_KEY and GEMINI_MODEL (the environment wins over .env) and return ai(prompt) -> text."""
+    key, model = _read_settings(env_path, environ)
+    del environ  # the whole environment (it may hold the key as plain text) must not stay in this frame
     if not env_loader.valid_api_key(key):
         raise AiNotConfigured("GEMINI_API_KEY is missing or still the sample text: put your key into the .env file (see .env.example)")
-    model = env_loader.get_setting("GEMINI_MODEL", file_values, environ, DEFAULT_MODEL)
     if not env_loader.valid_model_name(model):
         raise AiNotConfigured("GEMINI_MODEL has characters that are not allowed (letters, digits, dot, dash, underscore only)")
     fetch = http_fetch if fetch is None else fetch  # looked up now, so a test can replace it
