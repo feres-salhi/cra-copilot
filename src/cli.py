@@ -6,6 +6,7 @@ Commands:
     check-sbom   read an SBOM and list its components
     run          download the public data, check the product, save the run in runs/
     status       show when the last successful run was, with loud warnings
+    draft        create a PENDING case from a possible report case (a human types the awareness time)
     preview-report   print the German + English draft of each possible report case of a saved run (saves and sends nothing)
     kev accept-removals   a human accepts a KEV list that lost CVE ids (types "yes" and a name; nothing skips this)
 
@@ -25,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-from src import matcher, news_watcher, report_facts, report_writer
+from src import case_commands, matcher, news_watcher, report_facts, report_writer
 from src.sbom_reader import ConfigError, SbomError, load_sbom, read_product_config
 
 # Default folders are fixed next to the program, not "wherever the command was started":
@@ -271,24 +272,7 @@ MAX_PREVIEW_CASES = 50  # a forged run file must not cause an endless number of 
 
 def _load_sealed_run(path):
     """The saved run record as a dict, or (None, reason). A record without a valid seal is not trusted."""
-    try:
-        if not Path(path).is_file():  # a missing file, a folder, or a device such as CON or a pipe: never opened
-            return None, "the run file cannot be read"
-        with open(path, "rb") as handle:
-            raw = handle.read(news_watcher.MAX_CACHE_FILE_BYTES + 1)
-    except OSError:
-        return None, "the run file cannot be read"
-    if len(raw) > news_watcher.MAX_CACHE_FILE_BYTES:
-        return None, "the run file is too large"
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (ValueError, RecursionError):
-        return None, "the run file is not valid JSON"
-    if not isinstance(data, dict):
-        return None, "the run file is not a run record"
-    if data.get("seal") != news_watcher.run_seal(data):
-        return None, "the run file has no valid seal: it was not saved by this tool or was changed"
-    return data, None
+    return news_watcher.read_sealed_run(path)
 
 
 def _say(text, limit=1500):
@@ -409,6 +393,12 @@ def _preview_body(args):
     return 0 if all_ok else 1
 
 
+def _cve_argument(text):
+    if not matcher.CVE_PATTERN.fullmatch(text):
+        raise argparse.ArgumentTypeError("a CVE id looks like CVE-2021-44228")
+    return text
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="cra", description="CRA Copilot: helps with the CRA 24-hour early warning. Never sends anything."
@@ -440,6 +430,18 @@ def build_parser():
     preview.add_argument("--env-file", default=str(PROJECT_ROOT / ".env"), help="file with GEMINI_API_KEY (only read with --live-ai)")
     preview.add_argument("--live-ai", action="store_true", help="let Google Gemini write the summary paragraph (default: off)")
     preview.set_defaults(handler=_preview_report)
+
+    draft = commands.add_parser(
+        "draft", help="create a PENDING case from a possible report case of a run (you type the awareness time; nothing is sent)")
+    draft.add_argument("--run", required=True, help="path to a saved run record (a file in runs/)")
+    draft.add_argument("--cve", type=_cve_argument, help="only this CVE id (when the run has several cases)")
+    draft.add_argument("--cases", default=str(PROJECT_ROOT / "cases"), help="folder for cases")
+    draft.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder with the saved KEV list")
+    draft.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
+    draft.add_argument("--evidence", default=str(PROJECT_ROOT / "evidence"), help="folder with human evidence files")
+    draft.add_argument("--env-file", default=str(PROJECT_ROOT / ".env"), help="file with GEMINI_API_KEY (only read with --live-ai)")
+    draft.add_argument("--live-ai", action="store_true", help="let Google Gemini write the summary paragraph (default: off)")
+    draft.set_defaults(handler=case_commands.draft_command)
 
     kev = commands.add_parser("kev", help="work with the saved CISA KEV list")
     kev_commands = kev.add_subparsers(dest="kev_command", required=True)

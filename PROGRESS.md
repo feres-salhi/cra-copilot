@@ -567,3 +567,21 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **Fares found a bug in the live test: the API key could leak in a traceback.** It was fixed in commit 514a1fe, with 10 regression tests (screenshot 08). The old key counts as burned.
 - **Decision P1 (Fares, 2026-11-02):** keep the "AI chooses from approved sentences" design.
 - CLAUDE.md folder list updated with the new Phase 3 files (nothing else in CLAUDE.md was changed).
+
+## Phase 4 (autopilot, 2026-11-02)
+
+### Piece 1 - the case data model (`src/cases.py`)
+- **What it is:** one folder per case, `cases/<case-id>/`, with `facts.json`, `draft.md` (English and German in one plain-text file), `check.json` (what the fact checker said when the draft was made; information only) and `case.json` (status PENDING or APPROVED, where the case came from, what the human typed). I added `case.json` because the status and the origin have to live somewhere.
+- **Case id:** `case-` plus 12 letters/digits (0-9, a-f), made from product, component, version and CVE. The same case therefore gets the same id and cannot be drafted twice. The id is checked against this strict pattern before any file path is built.
+- **Safe writing:** the case is built in a temporary folder and renamed in one step, so a crash never leaves a half-written case that blocks the id. A draft that failed the fact check is never written.
+- **Reviews:** code reviewer and security auditor both ran. Fixed: an APPROVED status without a full approval record is refused when loading; `save_meta` cannot move a case back to PENDING; texts that would not survive writing and reading are refused before anything is written; `check.json` keeps only known keys; the half-case-on-crash problem.
+- **Not fixed (small):** a symlink as a file inside a case folder is followed; `list_cases` reads at most 1000 cases silently. A person who can write to this computer is trusted anyway (S7).
+- **Tests:** 41 new (`tests/test_cases.py`); full suite 1036 passed, 5 skipped.
+
+### Piece 2 - `cra draft`
+- **What it does:** `cra draft --run <run file> [--cve CVE-...]` makes a PENDING case from a possible report case of a sealed run (a run file without a valid seal is refused). A **human types** the awareness time with a time zone, for example `2026-11-02 09:30 Berlin` (or UTC, or `+01:00`). Piped input or a scheduled task cannot answer: it cancels. No flag answers a question.
+- **Checks against what the tool itself saw:** not in the future; not earlier than the day the CVE was added to KEV (or the date of the human evidence file; a date has no time zone, so it is read as the first moment that date exists anywhere); if it is **later than the first sealed run that found the case**, a loud warning is shown and a typed reason (10 to 300 characters) is needed; if the 24 hours have already passed, a loud warning is shown. Berlin times in the repeated or skipped hour of the clock change are refused (type an offset instead).
+- **Deadline:** awareness time + 24 hours, stored in UTC, shown in Berlin time and UTC. The screen also shows the KEV `dateAdded`, when the KEV list was saved, and says that no vendor/product text is stored (compare by hand with the CISA website; PLAN (i) item 4).
+- **Reviews and fixes:** two reviewers, no serious findings. Fixed: run files over 2 MB are skipped when searching for the first run; offsets limited to -12:00..+14:00; reason at least 10 characters; file names are printed through the safe printer; the runs folder searched is shown. Weak tests were made stricter.
+- **Still open (by design, goes into piece 3):** the run record is only sealed with an unkeyed fingerprint, so piece 3 re-derives "affected" from the SBOM.
+- **Tests:** 54 in `tests/test_awareness.py`, 25 in `tests/test_cli_draft.py`; full suite 1120 passed, 5 skipped.
