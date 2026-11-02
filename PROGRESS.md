@@ -1,5 +1,13 @@
 # Progress Log
 
+## Improvements work order (2026-11-02): piece entries
+
+### Piece 1 - the summary no longer says "This text is a draft"
+- **What changed:** the sentence "This text is a draft." / "Dieser Text ist ein Entwurf." was removed from the approved-sentence table (`src/summary_sentences.py`). The AI prompt, the fallback paragraph and the fact checker all read that one table, so they changed with it. Only the heading and footer written by code now say draft / approved / sent. The AI prompt also says "an early warning" instead of "a draft early warning".
+- **Old texts are now refused:** a text that still contains the old sentence fails the fact check ("not an approved sentence").
+- **The already approved demo case keeps its old wording:** I did not touch `cases/` (as ordered). `cases/case-f341d2b694ea` still contains the old sentence. Its status is worked out from fingerprints, so it still shows as approved. Known limit found by the reviewer: such an old case cannot be re-drafted with `cra draft` (it says "already exists"; there is no redraft function), and `cra approve` would refuse its text. Moving the folder away by hand is the only way, and that is your decision.
+- **Tests:** 1234 passed, 3 skipped, 2 deselected (before: 1232). Code reviewer and security auditor subagents: no serious findings.
+
 ## Summary for Fares: Phase 4 finished (autopilot, 2026-11-02)
 
 **What was built (nothing is ever sent; there is no send function anywhere, and a test checks that)**

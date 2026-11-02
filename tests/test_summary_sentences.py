@@ -48,15 +48,15 @@ def test_no_approved_sentence_claims_anything_about_approval_sending_fixes_risk_
     """A guard for future edits of the table: these words must never appear in an approved sentence."""
     risky = re.compile(r"approved|sent\b|submitted|safe|secure|fixed|patch|critical|harmless|not affected|unaffected|written by|"
                        r"was reported|has been|already|yesterday|today|freigegeben|gesendet|sicher|behoben|kritisch|harmlos|"
-                       r"nicht betroffen|geschrieben von|wurde gemeldet|bereits|gestern|heute", re.I)
+                       r"nicht betroffen|geschrieben von|wurde gemeldet|bereits|gestern|heute|draft|entwurf|final|endgültig|abgeschickt", re.I)
     for sid, _, text in ss.SENTENCES:
         for lang in ("de", "en"):
             assert not risky.search(text[lang]), (sid, lang)
 
 
 def test_the_fallback_is_every_applicable_sentence_in_the_allowed_order():
-    assert ss.fallback_ids("kev") == ["contains", "listed", "kev", "human_check", "draft"]
-    assert ss.fallback_ids("evidence_file") == ["contains", "listed", "evidence", "human_check", "draft"]
+    assert ss.fallback_ids("kev") == ["contains", "listed", "kev", "human_check"]
+    assert ss.fallback_ids("evidence_file") == ["contains", "listed", "evidence", "human_check"]
 
 
 # ------------------------------------------------------------------ parsing a paragraph
@@ -143,3 +143,18 @@ def test_a_huge_text_is_refused_quickly():
         started = time.monotonic()
         assert ss.parse(text, "en", "kev")[0] == []
         assert time.monotonic() - started < 2.0
+
+
+def test_the_summary_never_says_anything_about_the_state_of_the_document():
+    """Draft / approved / sent is said ONLY by the heading and the footer written by code (work order piece 1)."""
+    assert "draft" not in ss.IDS
+    for _, _, text in ss.SENTENCES:
+        for lang in ("de", "en"):
+            assert not re.search(r"draft|entwurf", text[lang], re.I)
+
+
+def test_a_paragraph_with_the_old_draft_sentence_is_now_refused():
+    for lang, old in (("en", "This text is a draft."), ("de", "Dieser Text ist ein Entwurf.")):
+        text = ss.compose(["contains"], lang) + " " + old
+        ids, problems = ss.parse(text, lang, "kev")
+        assert ids == [] and problems
