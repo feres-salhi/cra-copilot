@@ -325,6 +325,16 @@ FORBIDDEN_IMPORTS = {"smtplib", "ftplib", "poplib", "imaplib", "telnetlib", "soc
 FORBIDDEN_NAME_PARTS = ("send", "submit", "upload", "smtp", "mail", "transmit", "publish", "post_report")
 
 
+def allowed_imports(path):
+    """Only the desktop-notification file may start a program (Windows PowerShell, for the toast). It has no network code."""
+    return {"subprocess"} if path.name == "toast.py" else set()
+
+
+def test_only_the_toast_file_starts_programs():
+    users = {p.name for p in SRC.glob("*.py") if "subprocess" in p.read_text(encoding="utf-8")}
+    assert users == {"toast.py"}
+
+
 def test_the_code_has_no_send_function_and_no_way_to_send():
     for path in SRC.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -332,14 +342,14 @@ def test_the_code_has_no_send_function_and_no_way_to_send():
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 assert not any(part in node.name.lower() for part in FORBIDDEN_NAME_PARTS), (path.name, node.name)
             if isinstance(node, ast.Import):
-                assert not ({a.name.split(".")[0] for a in node.names} & FORBIDDEN_IMPORTS), (path.name, "import")
+                assert not ({a.name.split(".")[0] for a in node.names} & (FORBIDDEN_IMPORTS - allowed_imports(path))), (path.name, "import")
                 if any(a.name.startswith("urllib") for a in node.names):
                     assert path.name == "news_watcher.py", (path.name, "only the download module may use urllib")
             if isinstance(node, ast.Call):
                 called = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
                 assert called not in {"sendall", "sendto", "sendmail", "send_message", "system", "popen", "__import__", "startfile"}, (path.name, called)
             if isinstance(node, ast.ImportFrom) and node.module:
-                assert node.module.split(".")[0] not in FORBIDDEN_IMPORTS, (path.name, node.module)
+                assert node.module.split(".")[0] not in FORBIDDEN_IMPORTS - allowed_imports(path), (path.name, node.module)
                 if node.module.startswith("urllib"):
                     assert path.name == "news_watcher.py", (path.name, "only the download module may use urllib")
 
