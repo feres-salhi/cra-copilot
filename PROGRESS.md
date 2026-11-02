@@ -1,5 +1,30 @@
 # Progress Log
 
+## Summary for Fares: improvements work order finished (2026-11-02)
+
+**What changed (nothing is ever sent; no push; `.env` never touched; the real Gemini API never called; Phase 5 not started)**
+1. **Summary never says "draft".** The sentence "This text is a draft." is gone from the approved sentences. Only the heading and footer written by code say draft / approved / sent. Old texts with that sentence are now refused by the fact checker. The already approved demo case in `cases/` keeps its old wording (I did not touch it); it cannot be re-drafted with `cra draft` ("already exists"), moving its folder away by hand is your decision.
+2. **Commands that really work.** The tool now prints `.venv\Scripts\python -m src approve ...` (derived from how it was started) instead of `cra approve ...`. Paths with odd characters are never pasted into a command. Nothing was installed.
+3. **`cra status` has two clocks.** It always shows the latest run and the latest run where every source was ok. The 26-hour warning uses the second one, so a stopped scheduler is now noticed even though the demo result is always INCOMPLETE. A result is never called complete when components are UNKNOWN. Old run files load unchanged (no new field).
+4. **ISO 8601 awareness time** (`2026-11-02T01:50+01:00`, `...Z`) is accepted; no zone, future or too early are still refused.
+5. **Same vulnerability shown once** in `cra run` (GHSA + PYSEC ids on one line). Display only: matcher and run record unchanged.
+6. **"A human should confirm"** only for `upstream` (or unexpected) links; alias links stay recorded in the run record, the draft screen and the report assessment line.
+7. **New `docs/run-record-format.md`:** every field of `runs/*.json` in simple words, for the Phase 5 dashboard.
+
+**Numbers (real, final runs)**
+- Tests: `env -u CRA_LIVE_AI .venv\Scripts\python -m pytest -q --deselect tests/test_live_ai.py` gives **1319 passed, 3 skipped, 2 deselected**; without the deselect: **1319 passed, 5 skipped**. Before this work order: 1232 passed, 3 skipped, 2 deselected. 87 new/changed tests.
+- **Bandit:** No issues identified (3,908 lines, 0 Low / 0 Medium / 0 High).
+- Every piece went through the code-reviewer and the AI-generated code security auditor subagents. Real findings that I fixed: command-path quoting (piece 2), a future-dated run could hide a stopped scheduler (piece 3), grouping ignored purl/ecosystem/link kind (piece 5), unknown link kinds must still warn (piece 6). No serious finding was left open.
+
+**Still open (honest)**
+- Piece 3, low, needs a forged sealed run record: a record without a `components` field is not treated as "unchecked"; a future-dated run still becomes "the latest run" on the status screen (status stays red with a clock warning).
+- Piece 2: only the `status` text is checked end to end with the real command derivation; the other messages are covered by the fixed name `cra` in tests. The form is written for PowerShell and works from the project folder.
+- Piece 4: `-00:00` is accepted as UTC; no test types an ISO answer through the whole `cra draft` dialogue.
+- The old approved demo case (see 1). `screenshots/09-human-approval.png` is still not committed.
+- Not done on purpose: Strix, the schedule scripts, pushing to GitHub.
+
+---
+
 ## Improvements work order (2026-11-02): piece entries
 
 ### Piece 1 - the summary no longer says "This text is a draft"
