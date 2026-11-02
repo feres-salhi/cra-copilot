@@ -89,7 +89,8 @@ def test_an_approved_case_is_listed_while_there_is_still_time_to_submit_by_hand(
     tail = open_part(out)
     assert case_id in tail and "APPROVED" in tail and "by hand" in tail
     _, out = run_at(tmp_path, LATER + timedelta(days=3), capsys)
-    assert case_id not in open_part(out)  # the deadline is long gone and the text was approved
+    # Q5: an approved case stays listed after its deadline until a human marks it with `cra close`
+    assert case_id in open_part(out) and "cra close" in open_part(out)
 
 
 def test_a_case_that_changed_after_approval_is_loud(tmp_path, capsys):

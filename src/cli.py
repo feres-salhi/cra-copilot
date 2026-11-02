@@ -9,6 +9,7 @@ Commands:
     approve      a human reads and approves a PENDING case (asks questions; nothing is sent)
     draft        create a PENDING case from a possible report case (a human types the awareness time)
     preview-report   print the German + English draft of each possible report case of a saved run (saves and sends nothing)
+    close        a human marks an approved case as submitted by hand
     alerts       --test shows one test notification, --list shows the last alerts (cache/alerts.log)
     kev accept-removals   a human accepts a KEV list that lost CVE ids (types "yes" and a name; nothing skips this)
 
@@ -525,6 +526,12 @@ def build_parser():
     approve.add_argument("--sbom", help="only if the SBOM file moved: its new path (it must still be the same file)")
     approve.add_argument("--config", help="only if the config file moved: its new path")
     approve.set_defaults(handler=case_commands.approve_command)
+
+    close = commands.add_parser(
+        "close", help="a human marks an approved case as submitted by hand (asks questions; nothing is sent)")
+    close.add_argument("case_id", help="the case id, for example case-0123456789ab")
+    close.add_argument("--cases", default=str(PROJECT_ROOT / "cases"), help="folder for cases")
+    close.set_defaults(handler=case_commands.close_command)
 
     alert_cmd = commands.add_parser(
         "alerts", help="check or read the desktop alerts (--test shows one test notification, --list shows the last alerts)")

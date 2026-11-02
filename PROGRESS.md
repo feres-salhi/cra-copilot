@@ -1,8 +1,13 @@
 # Progress Log
 
-## Summary for Fares: Q1 work order (2026-11-02), unfinished at the end
-- **Built (pieces 1-5, each committed):** alert rules + state file, Windows toast, `cache/alerts.log`, `alerts --test` / `alerts --list`, `run --no-alerts`. Nothing was sent, nothing pushed, `.env` untouched, no real Gemini call, no Strix, no Windows setting changed.
-- **Not done:** the end-of-work Bandit re-check after piece 5 and the security-auditor result for piece 5; `cra close` (Q5); the real toast was never shown on screen: please run `.venv\Scripts\python -m src alerts --test`.
+## Summary for Fares: Q1 work order finished (2026-11-02)
+- **Built, each piece committed with tests first and both reviewers:** (1) alert rules + `cache/alerts-state.json`, (2) Windows toast via PowerShell (fixed script, values as data), (3) `cache/alerts.log` (UTC + Berlin time), (4) `alerts --test` / `alerts --list`, (5) `run --no-alerts`, (6) Q5 `cra close <case-id>`.
+- **Numbers (real):** full suite 1450 passed, 3 skipped, 2 deselected (before this work: 1319 passed). Bandit: no issues (4,455 lines). 
+- **Q2-Q5 decided with the recommended defaults** (see QUESTIONS.md): Q2, Q3, Q4 unchanged; Q5 built.
+- **Behavior change to know:** an approved case past its deadline now stays on the open list until `cra close` (before: it disappeared silently).
+- **Not verified:** I never showed a real toast. Please run `.venv\Scripts\python -m src alerts --test` yourself. No toast can appear when nobody is logged in or Do Not Disturb is on; `cache/alerts.log` always has the alert.
+- **Left as is (low):** a symlink at `cache/alerts.log` or `cases/closed.log` is followed (needs write access to those folders); two overlapping runs can lose one alert-memory write (gives a duplicate alert, not silence); `--no-alerts` in a scheduled task would mean no warning at all, so do not use it there.
+- Not touched: the scheduled task, Windows settings, `.env`, Strix, push, Phase 5.
 
 ## Q1 work order (2026-11-02): desktop alerts - piece entries (newest summary comes at the end)
 
@@ -750,3 +755,7 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **Accepted, written down:** repeated code between `cra draft` and `cra approve` (reviewer items 3-5), an `approvals.log` over 20 MB, a missing `first_found` in `case.json` (local writer), `approvals.log` without a hash chain.
 - **Process slip, honest note:** during round 1 the code reviewer ran a bare `pytest`; with `CRA_LIVE_AI=1` set in the shell that made one real Gemini call (HTTP 429, failed, key neither read nor printed). My own runs always used `env -u CRA_LIVE_AI`.
 - **Final checks:** full suite 1232 passed, 3 skipped with the live tests deselected (5 skipped without the deselect); Bandit: No issues identified, 3,802 lines.
+
+### Q5 - `cra close <case-id>`
+- A human types the case id, "yes" and a name; the approved case is marked as submitted by hand and leaves the open list. The tool sends nothing and cannot check it. The mark is stored in `closed.json` and in `cases/closed.log`; it counts only while the approval it belongs to is unchanged (same text, approval time, SBOM and approver) and the matching log line exists. A damaged, oversized or forged `closed.json` never hides a case.
+- Reviews fixed: the mark was bound only to the text hash (a re-approval with the same text could silently re-close); the log line is now written first so a failure leaves the case open; the log is cross-checked. Tests: 20 in `tests/test_cli_close.py`.

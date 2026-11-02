@@ -216,8 +216,8 @@ def demote_to_pending(root, case_id):
 _LOG_CACHE = {}  # (path, modified time, size) -> parsed lines: a list of many cases reads the log only once
 
 
-def _log_entries(root):
-    path = Path(root) / "approvals.log"
+def _log_entries(root, name="approvals.log"):
+    path = Path(root) / name
     try:
         info = path.stat()
         key = (str(path), info.st_mtime_ns, info.st_size)
@@ -378,6 +378,59 @@ def approval_state(case):
     except (SbomError, KeyError, TypeError):
         return "CHANGED"
     return "APPROVED" if hashlib.sha256(raw).hexdigest() == approval["sbom_sha256"] else "CHANGED"
+
+
+CLOSED_NAME = "closed.json"
+CLOSED_SCHEMA = 1
+
+
+def _closed_fields(case):
+    approval = case.meta.get("approval")
+    if not isinstance(approval, dict):
+        return None
+    return {"case_id": case.case_id, "approved_sha256": approval.get("approved_sha256"),
+            "approved_at": approval.get("approved_at"), "sbom_sha256": approval.get("sbom_sha256"),
+            "approver": approval.get("approver")}
+
+
+def is_closed(case):
+    """True if a human marked this case as submitted by hand, the mark belongs to THIS approval (same text, approval time,
+    SBOM and approver), and closed.log has the matching line. A missing, damaged, oversized or foreign closed.json never
+    hides a case (it simply does not count)."""
+    try:
+        expected = _closed_fields(case)
+        if expected is None:
+            return False
+        data = _json_file(_read_file(case.folder, CLOSED_NAME), CLOSED_NAME)
+        name, when = data.get("closed_by"), data.get("closed_at")
+        if (data.get("schema") != CLOSED_SCHEMA or not isinstance(name, str) or not isinstance(when, str)
+                or len(name) > 80 or not name.isprintable()):
+            return False
+        if any(data.get(key) != value for key, value in expected.items()):
+            return False
+        datetime.fromisoformat(when)
+        return any(all(entry.get(key) == value for key, value in {**expected, "closed_by": name, "closed_at": when}.items())
+                   for entry in _log_entries(case.folder.parent, "closed.log"))
+    except (CaseError, ValueError, TypeError):
+        return False
+
+
+def write_closed(root, case, name, when_iso):
+    """Mark an approved case as submitted by hand. The history line in closed.log is written FIRST, closed.json last:
+    if anything fails, the case stays open (a stray log line is harmless)."""
+    folder = case_path(root, case.case_id)
+    if not folder.is_dir() or folder.is_symlink():
+        raise CaseError("the case does not exist")
+    expected = _closed_fields(case)
+    if expected is None:
+        raise CaseError("the case has no approval")
+    record = {"schema": CLOSED_SCHEMA, **expected, "closed_by": name, "closed_at": when_iso,
+              "note": "closed_at is when the human typed the confirmation, not when the report was submitted"}
+    line = json.dumps({k: v for k, v in record.items() if k not in ("schema", "note")}, sort_keys=True, separators=(",", ":")) + "\n"
+    Path(root).mkdir(parents=True, exist_ok=True)
+    with open(Path(root) / "closed.log", "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line)
+    _write_text(folder / CLOSED_NAME, _json_text(record))
 
 
 def list_cases(root):

@@ -58,5 +58,5 @@ powershell -ExecutionPolicy Bypass -File scripts\unregister-schedule.ps1
 - The task cannot draft or approve anything: `cra draft` and `cra approve` need a person at the keyboard.
   Every run ends with the list of open cases and their deadlines, and the possible report cases that still have no draft.
   But the screen output of a scheduled run is not shown anywhere. So run `cra run` yourself (or look at the newest file in `runs\`) regularly.
-  Nobody is notified automatically yet (a notification is a later improvement).
+  Since the Q1 work (2026-11-02) a scheduled run shows a Windows notification for something new or urgent (see `python -m src alerts --test` to check that it appears, `alerts --list` for the history, and `cache/alerts.log`). It cannot appear if no one is logged in or Do Not Disturb is on; the log always has it.
 - The task never sends anything anywhere except the downloads of public data from OSV.dev and CISA.
