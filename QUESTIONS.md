@@ -60,3 +60,13 @@ Fares decided S2, S3 and S7 on 2026-10-26 (marked **DECIDED** below). All other 
 | P6 | Draft text is plain text. Component and product names may contain characters that are special in Markdown or HTML (for example `~`, `@`, `&`), because refusing a real component name could hide a real case. The draft must be shown as plain text, never as a web page. | Plain text only; no HTML anywhere. |
 | P7 | (Done 2026-11-02, Phase 4 Part 0.) Please update the folder list in CLAUDE.md. Phase 3 added `src/report_facts.py` (facts + one formatter), `src/report_template.py` (fixed German/English template) and `src/env_loader.py` (tiny `.env` reader). I did not edit CLAUDE.md myself. | Documented in PROGRESS.md. |
 | P8 | Number words: the old plan said "no number words". The approved word list makes that automatic, so the German article `ein`/`eine` is allowed and English `one` is not. | As described. |
+
+## Questions from Phase 4 (2026-11-02, autopilot)
+
+| # | Question | Temporary (safe) choice used |
+|---|---|---|
+| Q1 | **Nobody sees the output of the scheduled run.** Windows Task Scheduler shows no console window, and `cra status` does not list open cases (only `cra run` does, at its end). A possible report case found at 03:00 would wait until a human runs `cra run` or looks at `runs\`. Should `cra status` also show the open cases and their deadlines, and should a desktop/e-mail notification be added later (a notification would be a new network path: it needs your decision)? | Not built. Documented in `scripts/README.md`. `cra run` run by hand shows the list. |
+| Q2 | The earliest allowed awareness time is the start of the day the CVE was added to KEV (read as the first moment that date exists anywhere, UTC+14). OSV `published` is not stored in the cache, so OSV does not set a lower limit. Should the cache keep `published`? | KEV date / human evidence date only. |
+| Q3 | The cache files (`cache/kev`, `cache/osv*`) and `cases/approvals.log` are not signed. A person who can write to this computer can forge them (same family as S7). | Documented as a known limit; no signing. |
+| Q4 | `cra draft` can use the AI (`--live-ai`) like `preview-report`; `cra approve` never calls the AI. Do you want `--live-ai` removed from `cra draft` (the draft would then always use the fixed approved sentences)? | Kept, off by default. |
+| Q5 | An approved case whose 24 hours are over disappears from the open-case list (nothing is marked "submitted", because the tool cannot know). Should a human be able to mark a case as submitted by hand (`cra close <case-id>`)? | Not built. |
