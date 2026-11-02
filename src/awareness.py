@@ -22,8 +22,10 @@ MAX_RUN_FILE_BYTES = 2 * 1024 * 1024  # real run records are small; bigger files
 EARLIEST_OFFSET = timezone(timedelta(hours=14))  # a calendar date starts here first (UTC+14)
 
 _INPUT = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2}) ([0-9]{2}):([0-9]{2}) (UTC|Z|Berlin|[+-][0-9]{2}:[0-9]{2})")
+_ISO = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2})(Z|[+-][0-9]{2}:[0-9]{2})")  # ISO 8601, no seconds
 FORMAT_HELP = ("Type the time like this:  2026-11-02 09:30 Berlin   (or UTC, or an offset such as +01:00). "
-               "Year-month-day, hour:minute (24-hour clock), then the time zone.")
+               "Year-month-day, hour:minute (24-hour clock), then the time zone. "
+               "ISO 8601 also works, for example 2026-11-02T01:50+01:00 or 2026-11-02T01:50Z (a time zone is always needed).")
 
 
 class AwarenessError(ValueError):
@@ -31,10 +33,10 @@ class AwarenessError(ValueError):
 
 
 def parse_awareness(text):
-    """What the human typed -> an aware datetime in UTC. Strict: one fixed format, a zone is always needed."""
+    """What the human typed -> an aware datetime in UTC. Strict: two fixed formats (the typed one and ISO 8601 with T), a zone is always needed."""
     if not isinstance(text, str) or len(text) > 100:
         raise AwarenessError("that is not a time. " + FORMAT_HELP)
-    match = _INPUT.fullmatch(text.strip())
+    match = _INPUT.fullmatch(text.strip()) or _ISO.fullmatch(text.strip())
     if not match:
         raise AwarenessError("that is not a time in the expected format. " + FORMAT_HELP)
     year, month, day, hour, minute = (int(v) for v in match.groups()[:5])

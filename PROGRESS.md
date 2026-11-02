@@ -17,6 +17,10 @@
 - **Found by the reviewers and fixed:** a run with a wrong future date could replace the real last good run and hide a stopped scheduler; now future-dated runs are ignored for (a) (test added).
 - **Still open (low, needs a forged sealed run record, same weakness as S7):** a sealed record whose `components` field is missing is not treated as "unchecked"; a future-dated run still becomes "the latest run" and its report-case counts are shown instead of the real latest run's (existing behaviour, status stays red with a clock warning).
 - **Old wording changed on purpose:** "there has never been a fully successful run" is now "no run has ever had all sources ok"; five older tests were updated for that. New tests: `tests/test_status_two_clocks.py` (11). **Total now: 1267 passed, 3 skipped, 2 deselected.**
+### Piece 4 - the awareness time also accepts ISO 8601
+- **What changed (`src/awareness.py`):** besides `2026-11-02 09:30 Berlin` / `UTC` / `+01:00`, the prompt now accepts ISO 8601 with a `T` and an offset or `Z`, for example `2026-11-02T01:50+01:00` or `2026-11-02T01:50Z`. The help text shows it. Still refused: no time zone, seconds, lower case `t`/`z`, a blank before the zone, `+0100`, impossible dates/offsets, a time in the future, a time earlier than the data allows (those checks are the same code as before and the tests run ISO times through them).
+- **Known small points (reviewers, not changed):** `-00:00` is accepted as UTC (the old format did the same). No test types an ISO answer through the whole `cra draft` dialogue; the typed text is stored as typed after it matched the strict pattern.
+- **Tests:** 29 new in `tests/test_awareness.py`. **Total now: 1296 passed, 3 skipped, 2 deselected.** Reviewers: no serious findings.
 
 ## Summary for Fares: Phase 4 finished (autopilot, 2026-11-02)
 
