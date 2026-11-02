@@ -118,11 +118,13 @@ def test_the_2_17_1_component_really_was_checked(tmp_path):
 # ------------------------------------------------------------------ status: honest and robust
 
 
-def test_incomplete_run_does_not_count_as_the_last_successful_run(tmp_path):
+def test_an_incomplete_result_is_never_called_complete_but_its_sources_still_count_as_working(tmp_path):
     put_run(tmp_path, complete=False)
     lines, ok = status(tmp_path)
+    text = "\n".join(lines)
     assert not ok
-    assert "never been a fully successful run" in "\n".join(lines)
+    assert "RESULT INCOMPLETE" in text and "Latest run: all sources ok." not in lines
+    assert "Latest run with all sources ok" in text
 
 
 def test_a_run_file_without_a_complete_flag_is_not_complete(tmp_path):

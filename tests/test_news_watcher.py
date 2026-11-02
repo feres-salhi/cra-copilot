@@ -439,7 +439,7 @@ def test_status_shows_result_incomplete_when_the_latest_run_is_not_ok(tmp_path):
 def test_status_when_no_run_was_ever_successful(tmp_path):
     nw.save_run(tmp_path, _run(NOW, {"kev": "failed", "osv": "ok"}), now)
     text = "\n".join(nw.status_report(tmp_path, now))
-    assert "never been a fully successful run" in text
+    assert "no run has ever had all sources ok" in text
     assert "RESULT INCOMPLETE" in text
 
 
@@ -647,7 +647,7 @@ def test_a_run_with_a_naive_time_does_not_crash_status(tmp_path):
     run["finished_at"] = "2026-10-21T12:00:00"  # no time zone
     nw.save_run(tmp_path, run, now)
     text = "\n".join(nw.status_report(tmp_path, now))
-    assert "never been a fully successful run" in text
+    assert "no run has ever had all sources ok" in text
     assert "RESULT INCOMPLETE" in text
 
 
@@ -655,7 +655,7 @@ def test_a_run_with_garbage_time_does_not_crash_status(tmp_path):
     run = _run(NOW, {"kev": "ok"})
     run["finished_at"] = "not a time"
     nw.save_run(tmp_path, run, now)
-    assert "never been a fully successful run" in "\n".join(nw.status_report(tmp_path, now))
+    assert "no run has ever had all sources ok" in "\n".join(nw.status_report(tmp_path, now))
 
 
 def test_a_run_dated_in_the_future_gets_a_clock_warning(tmp_path):

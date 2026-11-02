@@ -40,7 +40,7 @@ def test_a_crashed_run_leaves_a_failed_record_that_status_shows(tmp_path, capsys
     out = capsys.readouterr().out
     assert code == 1
     assert "RESULT INCOMPLETE" in out  # the older good run no longer hides the crash
-    assert "Last successful run" in out
+    assert "Latest run with all sources ok" in out
 
 
 def test_an_unusable_cache_folder_also_leaves_a_failed_record(tmp_path, capsys):

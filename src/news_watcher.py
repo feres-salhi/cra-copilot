@@ -842,6 +842,21 @@ def run_is_complete(run):
     return all(isinstance(s, dict) and s.get("status") == "ok" for s in sources.values())
 
 
+def run_sources_ok(run):
+    """True if the machine worked in this run: it has sources and EVERY source was ok.
+
+    This says nothing about the RESULT being complete (a component without a purl is UNKNOWN, so the demo product's
+    result is never complete). `status` uses this for the 26-hour warning and `run_is_complete` for the result.
+    It also ignores SBOM warnings and data gaps: those make the RESULT incomplete, and the latest run still shows them.
+    """
+    if not isinstance(run, dict):
+        return False
+    sources = run.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        return False
+    return all(isinstance(s, dict) and s.get("status") == "ok" for s in sources.values())
+
+
 MAX_NAME_TRIES = 1000  # most numbered names tried for one run file before giving up
 MAX_RUN_TOTAL_BYTES = 200 * 1024 * 1024  # all run files together; more than this is not read (status says so)
 
@@ -883,14 +898,15 @@ def _read_run_file(path):
     return data
 
 
-def load_runs(run_dir):
-    """Return the runs `status` needs, oldest first: the newest run and the newest complete run.
+def load_runs(run_dir, now=utc_now):
+    """Return the runs `status` needs, oldest first: the newest run and the newest run with all sources ok.
 
     Only these two are kept in memory while the folder is read (not every file), and the folder has a total
     byte budget. Running out of budget adds a failed stand-in dated "now", so nothing dropped can look clean.
     """
     epoch = datetime.min.replace(tzinfo=timezone.utc)
-    newest = newest_good = None  # (sort key, record)
+    current = now()
+    newest = newest_ok = None  # (sort key, record)
     spent = 0
     over_budget = False
     for path in sorted(Path(run_dir).glob("*.json"), reverse=True):  # newest name first; the byte budget bounds the work
@@ -907,9 +923,10 @@ def load_runs(run_dir):
         key = (_parse_time(data["finished_at"]) or epoch, path.stem)
         if newest is None or key > newest[0]:
             newest = (key, data)
-        if run_is_complete(data) and (newest_good is None or key > newest_good[0]):
-            newest_good = (key, data)
-    kept = [item for item in (newest_good, newest) if item is not None]
+        # a run dated in the future (wrong clock) must not replace the real last run with all sources ok
+        if run_sources_ok(data) and key[0] <= current and (newest_ok is None or key > newest_ok[0]):
+            newest_ok = (key, data)
+    kept = [item for item in (newest_ok, newest) if item is not None]
     if over_budget:
         stand_in = {
             "finished_at": utc_now().isoformat(),
@@ -935,38 +952,50 @@ def _as_dict(value):
 
 def status_summary(run_dir, now=utc_now):
     """Return (lines, ok) for `cra status`. ok is False if anything deserves a warning."""
-    runs = load_runs(run_dir)
+    runs = load_runs(run_dir, now)
     if not runs:
         return [f"WARNING: no run found yet. Nothing has been checked. Run `{cli_name.command('run')}` first."], False
     lines = []
     ok = True
     current = now()
     last = runs[-1]
-    good = [r for r in runs if run_is_complete(r) and _parse_time(r["finished_at"]) is not None]
-    if not good:
-        ok = False
-        lines.append("WARNING: there has never been a fully successful run.")
-    else:
-        finished = _parse_time(good[-1]["finished_at"])
+    good = [r for r in runs if run_sources_ok(r) and _parse_time(r["finished_at"]) is not None
+            and _parse_time(r["finished_at"]) <= current]  # a run dated in the future never counts as the last good run
+
+    def describe_age(run, label):
+        """Show the time of a run; returns its age, or None (with a warning) if the date is in the future."""
+        nonlocal ok
+        finished = _parse_time(run["finished_at"])
+        if finished is None:
+            ok = False
+            lines.append(f"WARNING: the time of the {label} could not be read.")
+            return None
         age = current - finished
         if age < timedelta(0):
             ok = False
+            lines.append(f"WARNING: the {label} is dated in the future ({printable(run['finished_at'])}). "
+                         "Is the computer clock wrong? Do not rely on the age.")
+            return None
+        lines.append(f"{label[0].upper()}{label[1:]}: {printable(run['finished_at'])} ({int(age.total_seconds() // 3600)} hours ago)")
+        return age
+
+    # (b) the latest run, whatever it found; (a) the last run where the machine worked (every source ok).
+    describe_age(last, "latest run")
+    if not good:
+        ok = False
+        lines.append("WARNING: no run has ever had all sources ok (the downloads have never fully worked).")
+    else:
+        age = describe_age(good[-1], "latest run with all sources ok")
+        if age is not None and age > timedelta(hours=STALE_AFTER_HOURS):
+            ok = False
             lines.append(
-                f"WARNING: the last successful run is dated in the future ({printable(good[-1]['finished_at'])}). "
-                "Is the computer clock wrong? Do not rely on the age."
+                f"WARNING: the last run with all sources ok was more than {STALE_AFTER_HOURS} hours ago. "
+                "Is the scheduler still running? New exploited vulnerabilities may be missing."
             )
-        else:
-            lines.append(
-                f"Last successful run: {printable(good[-1]['finished_at'])} ({int(age.total_seconds() // 3600)} hours ago)"
-            )
-            if age > timedelta(hours=STALE_AFTER_HOURS):
-                ok = False
-                lines.append(
-                    f"WARNING: the last successful run was more than {STALE_AFTER_HOURS} hours ago. "
-                    "Is the scheduler still running? New exploited vulnerabilities may be missing."
-                )
     last_time = _parse_time(last["finished_at"])
-    if run_is_complete(last) and last_time is not None and last_time <= current:
+    last_unchecked = _as_dict(last.get("components")).get("unchecked")
+    never_claim_complete = isinstance(last_unchecked, int) and last_unchecked > 0  # UNKNOWN components: never "complete"
+    if run_is_complete(last) and not never_claim_complete and last_time is not None and last_time <= current:
         lines.append("Latest run: all sources ok.")
     else:
         ok = False
