@@ -27,3 +27,7 @@ secrets.*
 
 # Local Claude Code settings (personal, not for the repo)
 .claude/settings.local.json
+
+# Strix raw log and internal state (large, not for upload)
+reports/*/strix.log
+reports/*/.state/
