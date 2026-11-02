@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from src import cli_name
 from src.env_loader import Secret
 from src.safe_paths import safe_join
 
@@ -366,7 +367,7 @@ def check_kev_removals(cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_no
     """
     saved, saved_meta = load_kev_cache(cache_dir, now)
     if saved is None:
-        raise FetchError("there is no usable saved KEV copy to compare with; run `cra run` first")
+        raise FetchError(f"there is no usable saved KEV copy to compare with; run `{cli_name.command('run')}` first")
     raw, data = _fetch_json(fetch, sleep, KEV_URL, None, MAX_KEV_BYTES)
     problem = validate_kev(data, _saved_max_count(saved, saved_meta) or None, saved["dateReleased"], now())
     if problem:
@@ -936,7 +937,7 @@ def status_summary(run_dir, now=utc_now):
     """Return (lines, ok) for `cra status`. ok is False if anything deserves a warning."""
     runs = load_runs(run_dir)
     if not runs:
-        return ["WARNING: no run found yet. Nothing has been checked. Run `cra run` first."], False
+        return [f"WARNING: no run found yet. Nothing has been checked. Run `{cli_name.command('run')}` first."], False
     lines = []
     ok = True
     current = now()
@@ -999,7 +1000,7 @@ def status_summary(run_dir, now=utc_now):
         lines.append("WARNING: the SBOM of the latest run had warnings (no components or no dependency list).")
     lines.append(
         "Note: the 26-hour warning is not a guarantee for the 24-hour reporting deadline. It can fire after the "
-        "deadline has already passed. Schedule `cra run` every 4-6 hours (see QUESTIONS.md, question 5)."
+        f"deadline has already passed. Schedule `{cli_name.command('run')}` every 4-6 hours (see QUESTIONS.md, question 5)."
     )
     return lines, ok
 

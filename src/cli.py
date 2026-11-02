@@ -27,7 +27,7 @@ import json
 import sys
 from pathlib import Path
 
-from src import case_commands, matcher, news_watcher, report_facts, report_writer
+from src import case_commands, cli_name, matcher, news_watcher, report_facts, report_writer
 from src.sbom_reader import ConfigError, SbomError, load_sbom, read_product_config
 
 # Default folders are fixed next to the program, not "wherever the command was started":
@@ -97,7 +97,7 @@ def _save_failed_run(args, started, error_name):
     }
     try:
         news_watcher.save_run(args.runs, record, args.now)
-        print("A record of this failed run was saved; `cra status` will show it.")
+        print(f"A record of this failed run was saved; `{cli_name.command('status')}` will show it.")
     except OSError:
         print("The record of this failed run could NOT be saved either.")
 
@@ -201,7 +201,7 @@ def _run(args):
         saved_path = news_watcher.save_run(args.runs, run, args.now)
     except OSError as error:
         complete = False
-        print(f"RUN NOT SAVED ({type(error).__name__}): `cra status` will not see this run.")
+        print(f"RUN NOT SAVED ({type(error).__name__}): `{cli_name.command('status')}` will not see this run.")
 
     if not complete:
         print("RESULT INCOMPLETE - do not rely on this. Some source or component could not be fully checked.")
@@ -269,7 +269,7 @@ def _kev_accept_removals(args):
     try:
         news_watcher.accept_kev_removals(args.cache, check, name, args.now)
     except news_watcher.KevCopyChanged:
-        print("The saved KEV copy changed while you were deciding (for example a `cra run` saved a newer list). "
+        print(f"The saved KEV copy changed while you were deciding (for example a `{cli_name.command('run')}` saved a newer list). "
               "Nothing was changed. Run this command again.")
         return 1
     except OSError as error:
@@ -415,7 +415,7 @@ def _cve_argument(text):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="cra", description="CRA Copilot: helps with the CRA 24-hour early warning. Never sends anything."
+        prog=cli_name.command_prefix(), description="CRA Copilot: helps with the CRA 24-hour early warning. Never sends anything."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
