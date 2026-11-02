@@ -211,3 +211,51 @@ def test_first_found_stops_at_the_file_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(nw, "read_sealed_run", lambda p: (seen.append(p), real(p))[1])
     aw.find_first_found(runs, *KEY)
     assert len(seen) == 2
+
+
+# ---------------------------------------------------------------- improvement 4: ISO 8601 with "T" and an offset or "Z"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("2026-11-02T01:50+01:00", datetime(2026, 11, 2, 0, 50, tzinfo=timezone.utc)),   # the time Fares typed
+    ("2026-11-02T01:50Z", datetime(2026, 11, 2, 1, 50, tzinfo=timezone.utc)),
+    ("2026-11-02T09:30-05:00", datetime(2026, 11, 2, 14, 30, tzinfo=timezone.utc)),
+    ("2026-11-02T09:30+14:00", datetime(2026, 11, 1, 19, 30, tzinfo=timezone.utc)),
+    ("2026-11-02T09:30+00:00", datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)),
+    ("  2026-11-02T09:30Z  ", datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)),
+])
+def test_iso_8601_times_become_utc(text, expected):
+    assert aw.parse_awareness(text) == expected
+    assert aw.parse_awareness(text).utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize("bad", [
+    "2026-11-02T01:50",            # no time zone
+    "2026-11-02T01:50:00",         # no time zone (with seconds)
+    "2026-11-02T01:50:00+01:00",   # seconds are not accepted
+    "2026-11-02T01:50:00Z",
+    "2026-11-02t01:50Z", "2026-11-02T01:50z",   # lower case
+    "2026-11-02T01:50 +01:00", "2026-11-02T01:50 Z",   # a blank before the zone (use the other format)
+    "2026-11-02 01:50+01:00",      # a blank instead of T with a glued zone
+    "2026-11-02T01:50+0100", "2026-11-02T01:50+01",
+    "2026-11-02T01:50+15:00", "2026-11-02T01:50-13:00", "2026-11-02T01:50+01:60",
+    "2026-11-02T25:50Z", "2026-02-30T01:50Z", "2026-11-02T01:50Z\n2026-11-03T01:50Z",
+    "2026-11-02T01:50.5Z", "2026-11-02T01:50UTC", "2026-11-02T01:50 Berlin",
+    "２０２６-11-02T01:50Z",
+])
+def test_bad_iso_times_are_refused(bad):
+    with pytest.raises(aw.AwarenessError):
+        aw.parse_awareness(bad)
+
+
+def test_an_iso_time_goes_through_the_same_future_and_earliest_checks():
+    future = aw.parse_awareness("2026-11-02T12:01Z")
+    assert any("future" in r for r in aw.check_awareness(future, NOW, observation()).refusals)
+    early = aw.parse_awareness("2021-12-09T09:59Z")
+    assert any("earlier" in r for r in aw.check_awareness(early, NOW, observation()).refusals)
+    fine = aw.parse_awareness("2026-11-02T12:00+00:00")
+    assert aw.check_awareness(fine, NOW, observation()).refusals == []
+
+
+def test_the_help_text_mentions_the_iso_form():
+    assert "2026-11-02T01:50+01:00" in aw.FORMAT_HELP
