@@ -27,7 +27,7 @@ import json
 import sys
 from pathlib import Path
 
-from src import case_commands, cli_name, matcher, news_watcher, report_facts, report_writer
+from src import alerts, case_commands, cli_name, matcher, news_watcher, report_facts, report_writer
 from src.sbom_reader import ConfigError, SbomError, load_sbom, read_product_config
 
 # Default folders are fixed next to the program, not "wherever the command was started":
@@ -153,12 +153,19 @@ def _print_open_cases(args, config, report_cases, saved_path):
         print(f"(The list of open cases could not be shown: {type(error).__name__}. Look in the cases folder.)")
 
 
+def _raise_alerts(args, config, report_cases, kev_status, osv_status, run_failed):
+    """After the run: alert only for something new or urgent. Never changes the result or the exit code."""
+    alerts.after_run(args.now(), args.cache, args.cases, config, report_cases, kev_status, osv_status, run_failed,
+                     args.notify or alerts.default_notifier())
+
+
 def _run(args):
     try:
         config = read_product_config(args.config)
         sbom = load_sbom(args.sbom)
     except (ConfigError, SbomError) as error:
         print(f"REJECTED: {error}", file=sys.stderr)
+        _raise_alerts(args, {}, [], None, None, True)  # a broken input every 4 hours must not be silent
         return 2
 
     started = args.now()
@@ -169,12 +176,14 @@ def _run(args):
         print(f"RESULT INCOMPLETE - the cache folder could not be used ({type(error).__name__}).")
         _save_failed_run(args, started, type(error).__name__)
         _print_open_cases(args, config, [], None)  # the deadlines of open cases run on, whatever the download did
+        _raise_alerts(args, config, [], None, None, True)
         print("Nothing was sent. A human decides what happens next.")
         return 1
     except Exception as error:  # a last safety net: never end with a raw traceback and a wrong exit code
         print(f"RESULT INCOMPLETE - internal error ({type(error).__name__}). Do not rely on this run.")
         _save_failed_run(args, started, type(error).__name__)
         _print_open_cases(args, config, [], None)
+        _raise_alerts(args, config, [], None, None, True)
         print("Nothing was sent. A human decides what happens next.")
         return 1
     finished = args.now()
@@ -252,6 +261,7 @@ def _run(args):
     if saved_path:
         print(f"Run saved: {saved_path}")
     _print_open_cases(args, config, report_cases, saved_path)
+    _raise_alerts(args, config, report_cases, feeds.kev_status, feeds.osv_status, False)
     print("Nothing was sent. A human decides what happens next.")
 
     if report_cases:
@@ -520,8 +530,8 @@ def build_parser():
     return parser
 
 
-def main(argv=None, fetch=None, sleep=None, now=None, ask=None, ai=None):
-    """`fetch`, `sleep`, `now`, `ask` and `ai` can be replaced by tests; normal use leaves them empty."""
+def main(argv=None, fetch=None, sleep=None, now=None, ask=None, ai=None, notify=None):
+    """`fetch`, `sleep`, `now`, `ask`, `ai` and `notify` can be replaced by tests; normal use leaves them empty."""
     # A Windows console may not be able to show every character: never crash because of that.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -532,6 +542,7 @@ def main(argv=None, fetch=None, sleep=None, now=None, ask=None, ai=None):
     args.now = now or news_watcher.utc_now
     args.ask = ask or ask_human
     args.ai = ai
+    args.notify = notify
     return args.handler(args)
 
 
