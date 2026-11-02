@@ -108,7 +108,7 @@ Other commands: `kev accept-removals` and `check-sbom`.
 
 ### Schedule
 
-`scripts/register-schedule.ps1` registers a Windows scheduled task that runs the check every 4 hours (max 30 minutes, current user only; `-WhatIf` is available). `scripts/unregister-schedule.ps1` removes it. See [scripts/README.md](scripts/README.md). The schedule scripts were written and tested only by parsing. The scheduled run itself is shown in screenshot 10.
+`scripts/register-schedule.ps1` registers a Windows scheduled task that runs the check every 4 hours (max 30 minutes, current user only; `-WhatIf` is available). `scripts/unregister-schedule.ps1` removes it. See [scripts/README.md](scripts/README.md). The scripts were written and tested only by parsing; the assistant never ran them. Fares registered the task by hand on 2026-11-02, first with `-WhatIf`, then for real (state Ready). Screenshot 10 shows its runs.
 
 ## Setup
 
@@ -149,7 +149,7 @@ Note on skips: the skipped and deselected tests are the optional live tests (the
 Strix is an AI-driven security testing tool. Setup of the run:
 
 - Version 1.7.0, model Claude Haiku 5.5, quick mode, run on 2026-10-25
-- About 100.7 million tokens (100,849,428), 456 requests, cost $7.29
+- About 100.7 million tokens (100,849,428), 456 requests, real cost $7.29 (the estimate given beforehand was about $0.75 to $3.75 for a quick scan)
 - Scope: the runtime code in `src/`
 
 It reported **11 findings: 0 Critical, 0 High, 2 Medium, 9 Low.** All were addressed. Each fix has a test that was written first. Two fixes are partial (vuln-0001 and vuln-0007, see Known limits).
@@ -244,7 +244,7 @@ Please read these before trusting the tool.
 - Dependencies are pinned, but the pins have no hashes (no hash pinning).
 - The tool's checks use this computer's clock.
 - The vendor and product of KEV entries are not shown. Compare the CVE id and date with the CISA site by hand.
-- The assistant never showed a real toast itself while building this. Run `alerts --test` to check it on your computer. Screenshot 11 shows an alert.
+- The assistant never showed a real toast itself. Fares ran `alerts --test` and saw the real toast on 2026-11-02 ("CRA Copilot alert - Test notification ..."); screenshot 11 is that capture. A toast cannot appear when nobody is logged in or Do Not Disturb is on, so `cache/alerts.log` always has the alert.
 - The tool does not yet draft the user notice required by Article 14(8).
 - A human decides everything legal.
 
@@ -315,4 +315,4 @@ Fares Salhi, TU Darmstadt
 
 - GitHub: https://github.com/feres-salhi
 - Portfolio: https://faressalhi.com
-- LinkedIn: <TODO - add URL>
+- LinkedIn: https://www.linkedin.com/in/fares-salhi-03b53530a

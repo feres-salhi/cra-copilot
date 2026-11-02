@@ -46,7 +46,7 @@ The secrets check passed.
 
 *What I learned:* check the limits of a free tier before planning a long job on it.
 
-**Strix, second attempt.** I switched to Claude Haiku 5.5. The run took about 22 minutes (15:27 to 15:49 UTC), used 100.7 million tokens and cost $7.29. By my own account, the cost was much higher than I had estimated; the files only record the actual cost.
+**Strix, second attempt.** I switched to Claude Haiku 5.5. The run took about 22 minutes (15:27 to 15:49 UTC), used 100.7 million tokens and cost $7.29. The estimate I was given beforehand, in the planning chat, was about $0.75 to $3.75 for a quick scan. The real cost was $7.29 (`run.json`). The estimate comes from Fares's account; the files record only the real cost.
 
 *What I learned:* estimate the cost of an AI scan before starting it.
 
@@ -80,11 +80,11 @@ Screenshot 06 shows the tests after the Strix fixes.
 
 The tests ended at 977 passed, 5 skipped.
 
-## Undated: the `.env` file was overwritten
+## 2026-11-01: the `.env` file was overwritten (Fares's account)
 
-This happened between the Phase 3 entry and 2026-11-02. This is my own account. The project files do not record the date.
+This section is my own account. No project file proves it. I found the problem on 2026-11-01. The file had last been written on 2026-10-27 at 09:53.
 
-I typed notes into a Notepad tab that was still open on my `.env` file, and the file was overwritten by those notes.
+I had typed notes into a Notepad tab that was still open on my `.env` file, and the file was overwritten by those notes. I re-created `.env` with both keys. I copied the Gemini key again from AI Studio. I created a NEW Anthropic key and deleted the old one.
 
 *What I learned:* never keep a secret file open in an editor.
 
@@ -92,7 +92,7 @@ I typed notes into a Notepad tab that was still open on my `.env` file, and the 
 
 **Live Gemini test.** The first real Gemini call passed: mode `ai`, fact check PASS (screenshot 07). Later calls got HTTP 429, and the tool used the fixed fallback text, as designed.
 
-**Mistake: the API key was printed.** When the live test failed, pytest printed the full Gemini API key in a traceback, because tracebacks show plain-text variables. I noticed it. I treated the key as burned and rotated it. The fix:
+**Mistake: the API key was printed.** When the live test failed, pytest printed the full Gemini API key in a traceback, because tracebacks show plain-text variables. I noticed it. I treated the key as burned: I deleted that Gemini key and created a new one (Fares's account). The fix:
 
 - The key now lives in a `Secret` box that prints as `***`.
 - `http_fetch` drops inner error details.
@@ -119,7 +119,7 @@ Reviewers found a second leak path in the first fix, which I also fixed. There a
 
 A team reviewed it in 2 rounds. Two serious items were fixed. The secrets check passed (56 commits at that time). The tests ended at 1,232 passed.
 
-**Schedule.** The assistant wrote the schedule scripts (every 4 hours) but never ran them. Screenshot 10 shows the scheduled task on this computer, with LastTaskResult 3 (an exit code of `cra run`).
+**Schedule.** The assistant wrote the schedule scripts (every 4 hours) but never ran them. I registered the task myself on 2026-11-02, first with a `-WhatIf` dry run, then for real ("Done. The task is registered", state Ready) (Fares's account). Screenshot 10 shows its runs, with LastTaskResult 3 (an exit code of `cra run`).
 
 **Seven improvements:**
 
@@ -135,7 +135,7 @@ The tests ended at 1,319 passed.
 
 **Alerts and close.** I added alerts (Q1): rules, a toast, `alerts.log`, `alerts --test` and `--list`, and `--no-alerts`. I also added `close` (Q5). The tests ended at 1,450 passed (screenshot 11).
 
-**Honest note: the toast.** The assistant never showed a real toast itself. The way to check it is `alerts --test` on this computer (screenshot 11 shows an alert).
+**The toast.** The assistant never showed a real toast itself. I ran `alerts --test` and saw the real toast on 2026-11-02 ("CRA Copilot alert - Test notification ...") (Fares's account). Screenshot 11 is my capture of it.
 
 **Publish cleanup.** To get ready for GitHub I did these steps:
 
