@@ -270,13 +270,25 @@ def test_a_notifier_that_raises_does_not_crash_or_change_the_exit_code(tmp_path,
     assert "Nothing was sent" in capsys.readouterr().out
 
 
-def test_an_alert_that_could_not_be_delivered_is_tried_again_next_run(tmp_path):
+def test_an_alert_with_no_toast_and_no_log_is_tried_again_next_run(tmp_path):
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "alerts.log").mkdir()  # the log cannot be written
     failing = FakeNotifier(shown=False)
     run_with(tmp_path, failing)
     assert len(failing.calls) == 1
     working = FakeNotifier()
     run_with(tmp_path, working, when=NOW + timedelta(hours=4))
     assert len(working.calls) == 1
+
+
+def test_an_alert_whose_toast_failed_is_in_the_log_and_not_repeated(tmp_path, capsys):
+    failing = FakeNotifier(shown=False)
+    run_with(tmp_path, failing)
+    out = capsys.readouterr().out
+    assert "ALERT:" in out and "alerts.log" in out
+    run_with(tmp_path, failing, when=NOW + timedelta(hours=4))
+    assert len(failing.calls) == 1
+    assert "CVE-2021-44228" in (tmp_path / "cache" / "alerts.log").read_text(encoding="utf-8")
 
 
 def test_the_alert_is_also_printed_in_the_run_output(tmp_path, capsys):

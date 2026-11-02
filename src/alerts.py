@@ -22,12 +22,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src import cases, matcher, news_watcher
+from src import cases, matcher, news_watcher, report_facts
 from src.case_commands import _tool_deadline
 
 SOON = timedelta(hours=6)
 MAX_STATE_BYTES = 1_000_000
 STATE_NAME = "alerts-state.json"
+LOG_NAME = "alerts.log"
+MAX_LOG_BYTES = 1_000_000  # a bigger log is moved to alerts.log.1 and a new one is started
+MAX_LOG_IDS = 20
 STATE_SCHEMA = 1
 CASE_BUDGET_SECONDS = 20  # the scheduled run has a time limit
 
@@ -260,6 +263,59 @@ def _is_due(item, state, now):
     return repeat is not None and now - when >= repeat
 
 
+# ---------------------------------------------------------------- the log (every alert, also when the toast works)
+
+
+def log_path(cache):
+    return Path(cache) / LOG_NAME
+
+
+def _log_ids(items):
+    names = [text for text in (_named(item) for item in items) if text]
+    for item in items:  # a failed source is named too (fixed names only)
+        if item.source in SOURCE_NAMES.values() and item.status in ("failed", "stale", "not ok"):
+            names.append(f"{item.source} ({item.status})")
+    shown = ", ".join(names[:MAX_LOG_IDS])
+    if len(names) > MAX_LOG_IDS:
+        shown += f" and {len(names) - MAX_LOG_IDS} more"
+    return shown or "-"
+
+
+def log_line(now, kind, items, toast_shown):
+    """One line: UTC time | Berlin time | kind | ids | toast result. Only validated values are in it."""
+    utc = now.astimezone(timezone.utc)
+    berlin = utc.astimezone(report_facts.BERLIN)
+    kind = kind if kind in KIND_ORDER + (TEST,) else "UNKNOWN"
+    return (f"{utc.strftime('%Y-%m-%dT%H:%M:%SZ')} | {berlin.strftime('%Y-%m-%d %H:%M')} {berlin.tzname()} Berlin | {kind} | "
+            f"{_log_ids(items)} | toast: {'shown' if toast_shown else 'not shown'}")
+
+
+def append_log(cache, now, kind, items, toast_shown):
+    """Add one line to cache/alerts.log. True if it was written, False if not (never raises)."""
+    try:
+        path = log_path(cache)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if path.is_file() and path.stat().st_size > MAX_LOG_BYTES:
+                os.replace(path, path.with_name(LOG_NAME + ".1"))
+        except OSError:
+            pass  # a log a little over the limit is better than no log
+        line = log_line(now, kind, items, toast_shown) + "\n"
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                with open(path, "rb") as stream:
+                    stream.seek(-1, os.SEEK_END)
+                    if stream.read(1) != b"\n":
+                        line = "\n" + line  # a half-written last line must not swallow this one
+        except OSError:
+            pass
+        with open(path, "a", encoding="utf-8", newline="\n") as stream:
+            stream.write(line)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------- the whole step after a run
 
 
@@ -285,12 +341,17 @@ def _after_run(now, cache, cases_root, product, report_findings, kev_status, osv
             continue
         title, body = build_message(kind, group)
         say(f"ALERT: {body}")
-        if _show(notify, title, body):
+        shown = _show(notify, title, body)
+        logged = append_log(cache, now, kind, group, shown)
+        if not logged:
+            say("(The alert could not be written to " + LOG_NAME + ".)")
+        if not shown:
+            say("(The desktop notification could not be shown; the alert is in " + LOG_NAME + " in the cache folder.)" if logged
+                else "(The desktop notification could not be shown either, so this alert will come again at the next run.)")
+        if shown or logged:  # remembered only when a human can find it somewhere
             for item in group:
                 state[item.key] = now
             delivered.append((kind, len(group)))
-        else:
-            say("(The desktop notification could not be shown, so this alert will come again at the next run.)")
     # forget what is no longer true, so it alerts again if it comes back
     active = {item.key for item in items}
     prefixes = ("deadline-soon", "deadline-passed", "unreadable") if run_failed else (
