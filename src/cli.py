@@ -434,6 +434,8 @@ def build_parser():
     draft = commands.add_parser(
         "draft", help="create a PENDING case from a possible report case of a run (you type the awareness time; nothing is sent)")
     draft.add_argument("--run", required=True, help="path to a saved run record (a file in runs/)")
+    draft.add_argument("--sbom", required=True, help="path to the CycloneDX JSON file the run used (checked again)")
+    draft.add_argument("--config", required=True, help="path to the product config JSON file the run used")
     draft.add_argument("--cve", type=_cve_argument, help="only this CVE id (when the run has several cases)")
     draft.add_argument("--cases", default=str(PROJECT_ROOT / "cases"), help="folder for cases")
     draft.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder with the saved KEV list")

@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 
 from src import awareness as aw
-from src import cases, matcher, news_watcher, report_facts, report_writer
+from src import cases, matcher, news_watcher, rederive, report_facts, report_writer
+from src.sbom_reader import ConfigError, SbomError
 
 MAX_TRIES = 3
 MAX_REASON_LENGTH = 300
@@ -93,6 +94,7 @@ def draft_command(args):
     candidates = _distinct_cases(run, args.cve)
     if not candidates:
         print("No POSSIBLE REPORT CASE in this run." if not args.cve else "No POSSIBLE REPORT CASE with that CVE in this run.")
+        print("(`cra draft` only looks at cases the run record lists. Run `cra run` for a fresh check.)")
         return 0
     if not news_watcher.run_is_complete(run):
         print("Note: this run was INCOMPLETE (a source or a component could not be fully checked), so more cases may exist.")
@@ -101,12 +103,21 @@ def draft_command(args):
         print("Cancelled. Nothing was created.")
         return 1
 
-    kev, kev_meta = news_watcher.load_kev_cache(args.cache, args.now)
-    kev_ids = news_watcher.kev_cve_ids(kev) if kev else None
+    # The run record is only sealed with an unkeyed fingerprint: run the matcher again on the real SBOM (PLAN (i) item 3).
     try:
-        facts = report_facts.build_facts(run.get("product"), finding, kev_ids=kev_ids, evidence_dir=args.evidence)
-    except report_facts.FactsError as error:
-        print(f"Nothing was created: the facts of this case cannot be built ({news_watcher.printable(str(error), 300)}).")
+        config, components, sbom_sha256 = rederive.load_inputs(args.sbom, args.config, run.get("sbom_sha256"), run.get("product"))
+        finding, facts, feeds = rederive.rederive(components, config, finding, args.cache, args.evidence, args.now)
+    except (SbomError, ConfigError) as error:
+        print(f"REJECTED: {news_watcher.printable(str(error), 300)}")
+        return 2
+    except rederive.RederiveError as error:
+        print(f"Nothing was created: {news_watcher.printable(str(error), 400)}.")
+        return 1
+    print(f"Re-derived from the SBOM and the saved data: {finding['status']} ({finding['rule']}), the same finding as in the run record.")
+    # From here on ONE copy of the saved KEV list is used: the one the matcher just used.
+    kev, kev_ids, kev_meta = feeds.kev, feeds.kev_ids, feeds.kev_status
+    if kev is None and facts["exploited_via"] == "kev":
+        print("Nothing was created: no usable saved KEV list.")
         return 1
     case_id = cases.make_case_id(facts)
     if cases.case_path(args.cases, case_id).exists():
@@ -182,7 +193,7 @@ def draft_command(args):
         return 1
 
     try:
-        facts = report_facts.build_facts(run.get("product"), finding, kev_ids=kev_ids, evidence_dir=args.evidence,
+        facts = report_facts.build_facts(config, finding, kev_ids=kev_ids, evidence_dir=args.evidence,
                                          awareness=awareness)
     except report_facts.FactsError as error:
         print(f"Nothing was created: {news_watcher.printable(str(error), 300)}.")
@@ -226,6 +237,10 @@ def draft_command(args):
         "kev": kev_info,
         "awareness": {"typed": typed, "utc": facts["awareness_time_utc"], "reason": reason},
         "summary_mode": draft.source["mode"],
+        "sbom": {"path": str(Path(args.sbom).resolve()), "sha256": sbom_sha256},
+        "config_path": str(Path(args.config).resolve()),
+        "rederived": True,
+        "rederived_rule": finding["rule"],
     }
     try:
         created = cases.create_case(args.cases, facts, draft.reports, draft.check, draft.source,
