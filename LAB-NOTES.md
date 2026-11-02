@@ -90,7 +90,7 @@ I had typed notes into a Notepad tab that was still open on my `.env` file, and 
 
 ## 2026-11-02: A very long day (33 commits)
 
-**Live Gemini test.** The first real Gemini call passed: mode `ai`, fact check PASS (screenshot 07). Later calls got HTTP 429, and the tool used the fixed fallback text, as designed.
+**Live Gemini test.** The first real Gemini call passed: mode `ai`, fact check PASS. I saw this only in the live test output (`tests/test_live_ai.py`), with no screenshot. Later calls got HTTP 429, and the tool used the fixed fallback text, as designed. Screenshot 07 shows the draft warning with the fixed fallback text after the HTTP 429.
 
 **Mistake: the API key was printed.** When the live test failed, pytest printed the full Gemini API key in a traceback, because tracebacks show plain-text variables. I noticed it. I treated the key as burned: I deleted that Gemini key and created a new one (Fares's account). The fix:
 
@@ -133,7 +133,7 @@ A team reviewed it in 2 rounds. Two serious items were fixed. The secrets check 
 
 The tests ended at 1,319 passed.
 
-**Alerts and close.** I added alerts (Q1): rules, a toast, `alerts.log`, `alerts --test` and `--list`, and `--no-alerts`. I also added `close` (Q5). The tests ended at 1,450 passed (screenshot 11).
+**Alerts and close.** I added alerts (Q1): rules, a toast, `alerts.log`, `alerts --test` and `--list`, and `--no-alerts`. I also added `close` (Q5). The tests ended at 1,450 passed.
 
 **The toast.** The assistant never showed a real toast itself. I ran `alerts --test` and saw the real toast on 2026-11-02 ("CRA Copilot alert - Test notification ...") (Fares's account). Screenshot 11 is my capture of it.
 
