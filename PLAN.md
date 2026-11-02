@@ -311,6 +311,12 @@ Things the tool does **not** protect against in version 1. The README must say t
 3. **Partial fix of vuln-0001 (a planted run file).** Only the seal described above exists. A determined person with write access to the `runs/` folder can still forge a record. Run records made before the seal existed show as "not verified".
 4. **Partial fix of vuln-0007 (KEV ids that disappear).** If the new KEV list lacks ids the saved copy had, KEV becomes stale, the run is INCOMPLETE, and the saved copy is kept. A human can accept a real removal with `cra kev accept-removals` (decision S2: the human types "yes" and a name; it is logged in `cache/kev/accepted-removals.log`). This does **not** detect the cases in limit 1.
 
+5. **Phase 4 (2026-11-02): the cache files and the approval log are not signed (QUESTIONS.md Q3).** `cache/kev`, `cache/osv*`, `cases/approvals.log` and `case.json` are plain files. `cra draft` and `cra approve` re-derive "affected" from the SBOM and these saved files, and `cra approve` accepts an APPROVED case only if a matching line is in `approvals.log`, but a person who can write to this computer can forge all of them (same family as limit 2). The log is the evidence, not a signature. The same person can remove the `first_found` entry from `case.json` and so silence the "later than the first run" warning.
+6. **Phase 4: the "first run that found the case" is only what the sealed run records in `runs/` show.** Runs that were archived or deleted (QUESTIONS.md S8), and earlier runs in which the case was only a human-review item, are invisible to that check. The tool's own clock (first run + 24 hours) is shown at approval and in the open-case list, and the earlier of it and the typed deadline is used for the OVERDUE alarm.
+7. **Phase 4: the checks "not in the future" and "24 hours passed" use this computer's clock.** A wrong system clock gives wrong warnings.
+8. **Phase 4: a saved KEV list older than 3 days gets a warning, but is still used.** Nobody is notified when a scheduled run finds a case (QUESTIONS.md Q1); the screen output of a scheduled run is not shown anywhere.
+9. **Phase 4: whoever can change the files in the project folder can run code as the user** when the scheduled task starts (see `scripts/README.md`).
+
 ---
 
 ## (i) Phase 4 must-do list (from the Phase 3 team review, 2026-10-26)
@@ -324,3 +330,4 @@ These came out of the end-of-phase meeting (security architect, penetration test
 5. **Plain text only** for every export or e-mail (QUESTIONS.md P6).
 6. **Names that read like statements.** The preview warns when a product, manufacturer, component or version text contains a word such as "approved" or "sent". `cra approve` must show the same warning.
 
+**Phase 4 status of this list (2026-11-02):** items 1, 2, 3, 5 and 6 are built (`cra draft`, `cra approve`, `src/rederive.py`, plain-text files only, claim-word warnings in preview, draft and approve). **Item 4 was built only in part, on purpose:** the draft and the approval screen show the KEV `dateAdded`, the time the list was saved, its release date and its fingerprint, but **not the KEV vendor and product**, because the saved KEV copy keeps only CVE ids and dates (all free text from feeds is dropped so it can never travel to a report or the AI, PLAN risk 3). A human compares the CVE id and the date with the CISA website by hand. Decision for Fares: QUESTIONS.md Q2 / S3.
