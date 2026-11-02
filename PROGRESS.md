@@ -770,3 +770,12 @@ Simple words: this is the tidy-up before the first upload to GitHub.
 - **Step 6 done:** `LICENSE` (MIT, Copyright (c) 2026 Fares Salhi) added.
 - **Step 7 NOT done:** the work order gave no no-reply e-mail address (the line was empty). I will not guess one. No backup branch was made, no history was rewritten.
 - **Step 8 results:** full suite **1450 passed, 5 skipped** (the 5 skipped are the live tests; `CRA_LIVE_AI` was not set; no Gemini call). Bandit: **No issues identified**, 4,455 lines, 0 low / 0 medium / 0 high.
+
+### History rewrite before the first upload (2026-11-02) - nothing was pushed
+Simple words: I cleaned the project's history so it can be published.
+- **Your decisions:** screenshot 10 committed; `strix.log` and the `.state` folder removed from the whole history; the user name feres/fares in old PROGRESS.md versions and in screenshots is accepted; the third-party e-mail in the public advisory fixture is accepted.
+- **Backup first:** branch `backup-before-rewrite` holds the OLD history (with the old e-mail and the Strix log/state). It stays on this computer only and must never be pushed.
+- **One rewrite of all commits on master (git filter-branch, no new packages):** the two Strix paths were removed from every commit; author and committer of every commit are now "Fares Salhi" with the GitHub no-reply address. Messages, dates and Co-Authored-By lines were kept (76 Co-Authored-By lines before and after). Every commit got a new ID.
+- **Git settings for this repository:** user.name "Fares Salhi", user.email = the no-reply address.
+- **Proof:** `git log --format="%an <%ae> | %cn <%ce>" | sort | uniq -c` shows one line: 77 commits, all "Fares Salhi <319010127+feres-salhi@users.noreply.github.com>" for author and committer. `git log master -- reports/strix-2026-10-25/strix.log reports/strix-2026-10-25/.state` returns nothing.
+- **Tests after the rewrite:** 1450 passed, 5 skipped (the live tests; no Gemini call).
