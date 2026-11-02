@@ -3,7 +3,8 @@
 Why whole sentences: no checker can judge the *meaning* of free text (a list of forbidden words, or even a list of
 allowed words, still lets a false sentence through). So the AI may only CHOOSE from sentences that a human wrote and
 checked. Every sentence is true for every product and every case, in German and English, and has its placeholders in a
-fixed role. Nothing here says anything about impact, fixes, risk, time, approval or sending.
+fixed role. Nothing here says anything about impact, fixes, risk, time, or the state of the document (draft, approved, sent):
+that belongs only to the heading and footer written by code.
 
 Rules for a summary paragraph (checked by `fact_checker`):
     - it is made only of approved sentences, written exactly as in this table (white space may differ),
@@ -38,10 +39,6 @@ SENTENCES = (
     ("human_check", ("kev", "evidence_file"), {
         "en": "A human must check each statement before anything is reported.",
         "de": "Ein Mensch muss jede Aussage prüfen, bevor etwas gemeldet wird.",
-    }),
-    ("draft", ("kev", "evidence_file"), {
-        "en": "This text is a draft.",
-        "de": "Dieser Text ist ein Entwurf.",
     }),
 )
 IDS = tuple(sid for sid, _, _ in SENTENCES)

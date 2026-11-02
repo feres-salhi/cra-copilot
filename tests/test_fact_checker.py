@@ -228,7 +228,7 @@ def test_a_lie_in_the_summary_line_is_caught():
 def test_a_changed_word_in_the_summary_line_is_caught():
     facts = facts_for()
     reports = reports_for(facts)
-    result = fc.check_reports(facts, replace_in(reports, "de", "Dieser Text ist ein Entwurf.", "Dieser Text ist kein Entwurf."))
+    result = fc.check_reports(facts, replace_in(reports, "de", "Ein Mensch muss jede Aussage prüfen, bevor etwas gemeldet wird.", "Ein Mensch muss jede Aussage prüfen, bevor etwas gesendet wird."))
     assert not result.ok and any("summary line" in p for p in result.problems)
 
 
@@ -302,7 +302,7 @@ def test_a_paragraph_that_becomes_too_long_once_the_placeholders_are_filled_is_a
     long_name = "a" * 256
     facts = rf.build_facts({**PRODUCT, "product_name": "P" * 250, "manufacturer": "M" * 250}, kev_finding(component=long_name),
                            kev_ids={"CVE-2021-44228"})
-    result = fc.check_draft(facts, both(["contains", "listed", "kev", "human_check", "draft"]))
+    result = fc.check_draft(facts, both(["contains", "listed", "kev", "human_check"]))
     assert not result.ok and any("could not be written" in p for p in result.problems)
 
 

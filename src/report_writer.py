@@ -50,7 +50,7 @@ def build_prompt(lang, exploited_via):
         raise ValueError("unknown reason")
     sentences = "\n".join(f"{number}. {text[lang]}" for number, (_, text) in enumerate(ss.applicable(exploited_via), 1))
     return (
-        "You compose ONE short paragraph for a draft early warning about a software vulnerability. "
+        "You compose ONE short paragraph for an early warning about a software vulnerability. "
         f"Language: {_LANGUAGE_NAME[lang]}. Plain text on a single line.\n"
         "You may ONLY use the approved sentences below. Copy each sentence you use exactly, word for word. "
         "Do not change, translate, shorten or add any word, digit or character. "
