@@ -7,7 +7,7 @@ import pytest
 
 from src import cases
 from src.cli import main
-from tests.test_cli_run import NOW as RUN_TIME, run_cli
+from tests.test_cli_run import CONFIG, NOW as RUN_TIME, SBOM, run_cli
 
 LATER = RUN_TIME + timedelta(hours=2)  # the clock when the human drafts (two hours after the run)
 
@@ -37,6 +37,7 @@ def world(tmp_path):
 def draft(world, keyboard, extra=(), now=lambda: LATER, run_file=None):
     tmp_path, default_run = world
     args = ["draft", "--run", str(run_file or default_run), "--cve", "CVE-2021-44228", "--cases", str(tmp_path / "cases"),
+            "--sbom", SBOM, "--config", CONFIG,
             "--cache", str(tmp_path / "cache"), "--runs", str(tmp_path / "runs"), "--evidence", str(tmp_path / "evidence"), *extra]
     return main(args, ask=keyboard, now=now)
 
@@ -140,6 +141,7 @@ def test_without_a_yes_nothing_is_created(world, capsys):
 def test_a_piped_input_or_scheduled_task_is_not_a_human(world, capsys):
     tmp_path, run_file = world
     args = ["draft", "--run", str(run_file), "--cve", "CVE-2021-44228", "--cases", str(tmp_path / "cases"),
+            "--sbom", SBOM, "--config", CONFIG,
             "--cache", str(tmp_path / "cache"), "--runs", str(tmp_path / "runs"), "--evidence", str(tmp_path / "evidence")]
     assert main(args, now=lambda: LATER) == 1  # pytest's stdin is not a keyboard
     assert not (tmp_path / "cases").exists() or list((tmp_path / "cases").iterdir()) == []
@@ -175,7 +177,8 @@ def test_a_run_without_a_possible_report_case_says_so(tmp_path, capsys):
     run_cli(tmp_path, sbom=sbom)
     (run_file,) = (tmp_path / "runs").glob("*.json")
     capsys.readouterr()
-    code = main(["draft", "--run", str(run_file), "--cases", str(tmp_path / "cases"), "--cache", str(tmp_path / "cache"),
+    code = main(["draft", "--run", str(run_file), "--cases", str(tmp_path / "cases"), "--sbom", sbom, "--config", CONFIG,
+                 "--cache", str(tmp_path / "cache"),
                  "--runs", str(tmp_path / "runs"), "--evidence", str(tmp_path / "evidence")], ask=Keyboard(), now=lambda: LATER)
     assert code == 0 and "No POSSIBLE REPORT CASE" in capsys.readouterr().out
 
@@ -185,7 +188,7 @@ def test_without_the_saved_kev_list_no_case_is_drafted(world, capsys):
     (tmp_path / "cache" / "kev" / "kev-saved.json").unlink()
     capsys.readouterr()
     assert draft(world, Keyboard(GOOD_BEFORE_RUN, "yes")) == 1
-    assert "cannot be built" in capsys.readouterr().out
+    assert "could not be re-derived" in capsys.readouterr().out
     assert not (tmp_path / "cases").exists() or list((tmp_path / "cases").iterdir()) == []
 
 
@@ -204,7 +207,8 @@ def test_a_berlin_time_in_the_repeated_hour_is_asked_again(world, capsys):
 
 def test_several_cases_ask_which_one(world, capsys):
     tmp_path, run_file = world
-    args = ["draft", "--run", str(run_file), "--cases", str(tmp_path / "cases"), "--cache", str(tmp_path / "cache"),
+    args = ["draft", "--run", str(run_file), "--cases", str(tmp_path / "cases"), "--sbom", SBOM, "--config", CONFIG,
+            "--cache", str(tmp_path / "cache"),
             "--runs", str(tmp_path / "runs"), "--evidence", str(tmp_path / "evidence")]
     keyboard = Keyboard("99", "1", GOOD_BEFORE_RUN, "yes")
     code = main(args, ask=keyboard, now=lambda: LATER)

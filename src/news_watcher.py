@@ -722,6 +722,49 @@ def collect(components, cache_dir, fetch=http_fetch, sleep=time.sleep, now=utc_n
     )
 
 
+
+def feeds_from_cache(components, cache_dir, now=utc_now):
+    """Like `collect`, but reads ONLY the copies saved on this computer. No network is used.
+
+    Used to check a finding again (`cra draft`, `cra approve`). Whatever is missing or unreadable stays missing
+    (None), so it can never look like "no vulnerabilities".
+    """
+    kev, meta = load_kev_cache(cache_dir, now)
+    if kev is not None:
+        kev_status = {"status": "ok", "detail": "saved copy read from disk, not downloaded now", **meta}
+    else:
+        kev_status = {"status": "failed", "detail": "no usable saved KEV list on this computer"}
+    askable = [c for c in components if c.status == "OK" and c.purl]
+    purl_vulns, vulns = {}, {}
+    for purl in sorted({c.purl for c in askable}):
+        saved = _read_json(_purl_cache_path(cache_dir, purl))
+        entries = None
+        if isinstance(saved, dict) and saved.get("purl") == purl and isinstance(saved.get("vulns"), list):
+            try:
+                entries = [(v, m) for v, m in saved["vulns"]]
+                if not all(isinstance(v, str) and VULN_ID_PATTERN.fullmatch(v) for v, _ in entries):
+                    entries = None
+            except (TypeError, ValueError):
+                entries = None
+        if entries is None or len(entries) > MAX_IDS_PER_PURL:
+            purl_vulns[purl] = None
+            continue
+        purl_vulns[purl] = [v for v, _ in entries]
+        for vuln_id, _ in entries:
+            if vuln_id in vulns:
+                continue
+            try:
+                record = _read_json(_vuln_cache_path(cache_dir, vuln_id))
+            except ValueError:
+                record = None
+            vulns[vuln_id] = slim_osv_record(record) if _validate_vuln_record(record, vuln_id) else None
+    missing = any(v is None for v in purl_vulns.values()) or any(v is None for v in vulns.values())
+    osv_status = {"status": "failed" if missing else "ok", "detail": "saved copies read from disk, not downloaded now",
+                  "purls_asked": len(purl_vulns)}
+    return Feeds(kev=kev, kev_ids=kev_cve_ids(kev), kev_status=kev_status, osv_status=osv_status, purl_vulns=purl_vulns,
+                 vulns=vulns, checked=len(askable), unchecked=len(components) - len(askable))
+
+
 # ---------------------------------------------------------------- run files
 
 

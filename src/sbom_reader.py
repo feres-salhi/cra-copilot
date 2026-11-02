@@ -222,13 +222,26 @@ def _check_depth(text):
             depth -= 1
 
 
-def _load_json(path):
+def read_sbom_bytes(path):
+    """The raw bytes of an SBOM file (at most MAX_FILE_BYTES; a larger file is rejected). Read ONCE, so the caller can
+    hash and parse exactly the same bytes."""
     try:
         raw_bytes = _read_limited(path, MAX_FILE_BYTES)
-        if len(raw_bytes) > MAX_FILE_BYTES:
-            raise SbomError(f"SBOM file is larger than {MAX_FILE_BYTES} bytes")
-        text = raw_bytes.decode("utf-8-sig")
     except (OSError, ValueError, TypeError) as error:
+        raise SbomError(f"cannot read SBOM file: {error}") from error
+    if len(raw_bytes) > MAX_FILE_BYTES:
+        raise SbomError(f"SBOM file is larger than {MAX_FILE_BYTES} bytes")
+    return raw_bytes
+
+
+def _load_json(path):
+    return _parse_json_bytes(read_sbom_bytes(path))
+
+
+def _parse_json_bytes(raw_bytes):
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except (ValueError, TypeError) as error:
         raise SbomError(f"cannot read SBOM file: {error}") from error
 
     _check_depth(text)
@@ -242,7 +255,12 @@ def _load_json(path):
 
 def load_sbom(path):
     """Read a CycloneDX JSON file. Returns an SbomResult (components + warnings)."""
-    data = _load_json(path)
+    return load_sbom_bytes(read_sbom_bytes(path))
+
+
+def load_sbom_bytes(raw_bytes):
+    """The same as load_sbom, for bytes that were read already."""
+    data = _parse_json_bytes(raw_bytes)
 
     if not isinstance(data, dict):
         raise SbomError("SBOM must be a JSON object")
