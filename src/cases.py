@@ -25,13 +25,14 @@ from src.safe_paths import safe_join
 CASE_ID = re.compile(r"case-[0-9a-f]{12}")
 MAX_FILE_BYTES = 1_000_000
 MAX_LISTED_CASES = 1000
+MAX_LOG_BYTES = 20 * 1024 * 1024
 SCHEMA = 1
 STATUS_PENDING = "PENDING"
 STATUS_APPROVED = "APPROVED"
 STATUSES = (STATUS_PENDING, STATUS_APPROVED)
 EN_MARK = "=== ENGLISH ==="
 DE_MARK = "=== DEUTSCH ==="
-APPROVAL_KEYS = {"approver", "approved_at", "draft_sha256", "facts_sha256", "sbom_sha256"}
+APPROVAL_KEYS = {"approver", "approved_at", "draft_sha256", "facts_sha256", "sbom_sha256", "approved_sha256"}
 CASE_FILES = ("facts.json", "draft.md", "check.json", "case.json")
 
 
@@ -183,6 +184,64 @@ def save_meta(root, case_id, meta):
     _write_text(folder / "case.json", _json_text(meta))
 
 
+def write_approved(root, case_id, reports):
+    """Write approved.md (English + German, made by code from a checked draft). Returns its sha256."""
+    folder = case_path(root, case_id)
+    if not folder.is_dir() or folder.is_symlink():
+        raise CaseError("the case does not exist")
+    text = join_draft(reports)
+    _write_text(folder / "approved.md", text)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def demote_to_pending(root, case_id):
+    """A case that was approved but changed since is PENDING again: approved.md is removed and the status goes back.
+
+    The line in approvals.log stays (it is the history). Only a case that says APPROVED can be demoted.
+    """
+    folder = case_path(root, case_id)
+    if not folder.is_dir() or folder.is_symlink():
+        raise CaseError("the case does not exist")
+    current = _json_file(_read_file(folder, "case.json"), "case.json")
+    _check_meta(current)
+    if current["status"] != STATUS_APPROVED:
+        raise CaseError("only an approved case can be set back to PENDING")
+    try:
+        (folder / "approved.md").unlink()
+    except FileNotFoundError:
+        pass
+    _write_text(folder / "case.json", _json_text({**current, "status": STATUS_PENDING, "approval": None}))
+
+
+def _logged(root, case_id, approval):
+    """True if approvals.log has the line of this approval (same case, name, time and approved text)."""
+    try:
+        with open(Path(root) / "approvals.log", "rb") as handle:
+            raw = handle.read(MAX_LOG_BYTES + 1)
+    except OSError:
+        return False
+    if len(raw) > MAX_LOG_BYTES:
+        return False
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(entry, dict) and entry.get("case_id") == case_id and entry.get("approver") == approval["approver"]
+                and entry.get("time") == approval["approved_at"] and entry.get("approved_sha256") == approval["approved_sha256"]
+                and entry.get("draft_sha256") == approval["draft_sha256"] and entry.get("facts_sha256") == approval["facts_sha256"]):
+            return True
+    return False
+
+
+def append_approval_log(root, entry):
+    """Add ONE line (JSON) to cases/approvals.log. Lines are only ever added, never changed by this tool."""
+    line = json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
+    Path(root).mkdir(parents=True, exist_ok=True)
+    with open(Path(root) / "approvals.log", "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line)
+
+
 # ---------------------------------------------------------------- reading
 
 
@@ -230,8 +289,14 @@ def _check_meta(meta):
     if meta["status"] == STATUS_APPROVED:
         if (not isinstance(approval, dict) or set(approval) != APPROVAL_KEYS
                 or not all(isinstance(approval[k], str) and approval[k] for k in APPROVAL_KEYS)
-                or not all(len(approval[k]) == 64 for k in ("draft_sha256", "facts_sha256", "sbom_sha256"))):
+                or not all(len(approval[k]) == 64 for k in ("draft_sha256", "facts_sha256", "sbom_sha256", "approved_sha256"))):
             raise CaseError("case.json says APPROVED but the approval record is incomplete")
+        try:
+            datetime.fromisoformat(approval["approved_at"])
+        except ValueError as error:
+            raise CaseError("the approval time is not a valid time") from error
+        if len(approval["approver"]) > 80 or not approval["approver"].isprintable():
+            raise CaseError("the approver name is not valid")
     if meta["status"] == STATUS_PENDING and approval is not None:
         raise CaseError("case.json says PENDING but has an approval record")
     try:
@@ -264,6 +329,31 @@ def load_case(root, case_id):
     sha256 = {key: hashlib.sha256(raw[name]).hexdigest()
               for key, name in (("draft", "draft.md"), ("facts", "facts.json"), ("check", "check.json"), ("case", "case.json"))}
     return Case(case_id, folder, facts, reports, check, meta, sha256)
+
+
+def approval_state(case):
+    """"PENDING", "APPROVED" or "CHANGED" (it was approved, but the draft, the facts, approved.md or the SBOM are not what
+    was approved any more: it must be approved again)."""
+    if case.meta["status"] != STATUS_APPROVED:
+        return STATUS_PENDING
+    approval = case.meta["approval"]
+    if approval["draft_sha256"] != case.sha256["draft"] or approval["facts_sha256"] != case.sha256["facts"]:
+        return "CHANGED"
+    try:
+        approved = _read_file(case.folder, "approved.md")
+    except CaseError:
+        return "CHANGED"
+    if hashlib.sha256(approved).hexdigest() != approval["approved_sha256"]:
+        return "CHANGED"
+    if not _logged(case.folder.parent, case.case_id, approval):
+        return "CHANGED"  # an APPROVED status with no matching line in approvals.log was not made by `cra approve`
+    sbom = case.meta["origin"].get("sbom")
+    try:
+        from src.sbom_reader import SbomError, read_sbom_bytes
+        raw = read_sbom_bytes(sbom["path"])
+    except (SbomError, KeyError, TypeError):
+        return "CHANGED"
+    return "APPROVED" if hashlib.sha256(raw).hexdigest() == approval["sbom_sha256"] else "CHANGED"
 
 
 def list_cases(root):

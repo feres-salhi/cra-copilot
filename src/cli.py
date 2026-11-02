@@ -6,6 +6,7 @@ Commands:
     check-sbom   read an SBOM and list its components
     run          download the public data, check the product, save the run in runs/
     status       show when the last successful run was, with loud warnings
+    approve      a human reads and approves a PENDING case (asks questions; nothing is sent)
     draft        create a PENDING case from a possible report case (a human types the awareness time)
     preview-report   print the German + English draft of each possible report case of a saved run (saves and sends nothing)
     kev accept-removals   a human accepts a KEV list that lost CVE ids (types "yes" and a name; nothing skips this)
@@ -444,6 +445,16 @@ def build_parser():
     draft.add_argument("--env-file", default=str(PROJECT_ROOT / ".env"), help="file with GEMINI_API_KEY (only read with --live-ai)")
     draft.add_argument("--live-ai", action="store_true", help="let Google Gemini write the summary paragraph (default: off)")
     draft.set_defaults(handler=case_commands.draft_command)
+
+    approve = commands.add_parser(
+        "approve", help="a human reads and approves a PENDING case (asks questions, no way around them; nothing is sent)")
+    approve.add_argument("case_id", help="the case id, for example case-0123456789ab")
+    approve.add_argument("--cases", default=str(PROJECT_ROOT / "cases"), help="folder for cases")
+    approve.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder with the saved KEV and OSV data")
+    approve.add_argument("--evidence", default=str(PROJECT_ROOT / "evidence"), help="folder with human evidence files")
+    approve.add_argument("--sbom", help="only if the SBOM file moved: its new path (it must still be the same file)")
+    approve.add_argument("--config", help="only if the config file moved: its new path")
+    approve.set_defaults(handler=case_commands.approve_command)
 
     kev = commands.add_parser("kev", help="work with the saved CISA KEV list")
     kev_commands = kev.add_subparsers(dest="kev_command", required=True)

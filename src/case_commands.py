@@ -4,12 +4,14 @@ Both are for a HUMAN at a keyboard. Piped input or a scheduled task cancels them
 question for the human (CLAUDE.md rule 6). Nothing here sends anything: there is no send function in this tool.
 """
 
+import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 
 from src import awareness as aw
-from src import cases, matcher, news_watcher, rederive, report_facts, report_writer
-from src.sbom_reader import ConfigError, SbomError
+from src import cases, fact_checker, matcher, news_watcher, rederive, report_facts, report_template, report_writer
+from src.sbom_reader import ConfigError, SbomError, read_sbom_bytes
 
 MAX_TRIES = 3
 MAX_REASON_LENGTH = 300
@@ -254,4 +256,171 @@ def draft_command(args):
     print(f"\nCase {created} created with the status PENDING (cases/{created}/).")
     print(f"Next: read the text and approve it with:  cra approve {created}")
     print("Nothing was sent. A human decides what happens next.")
+    return 0
+
+
+# ---------------------------------------------------------------- cra approve
+
+
+def _print_case_screen(case, facts, kev_info, reports):
+    print(f"\n=== {matcher.REPORT_CASE_LABEL} ===")
+    print(f"Case: {case.case_id}")
+    print("Please check these values against your own records:")
+    for label, key in (("Manufacturer", "manufacturer"), ("Product", "product_name"), ("Component", "component"),
+                       ("Component version", "version"), ("Vulnerability (CVE)", "cve_id")):
+        print(f"  {label}: {news_watcher.printable(facts[key], 200)}")
+    print(f"  Member states: {news_watcher.printable(', '.join(facts['member_states']), 200)}")
+    print(f"  Awareness time: {_berlin_and_utc(facts['awareness_time_utc'])}")
+    print(f"  Deadline (awareness + 24 hours): {_berlin_and_utc(facts['deadline_utc'])}")
+    if kev_info:
+        print(f"  KEV dateAdded: {kev_info['date_added']}; KEV list saved on this computer at "
+              f"{news_watcher.printable(kev_info['downloaded_at'], 40)}, released {news_watcher.printable(kev_info['date_released'], 40)}. "
+              "Compare the CVE id and this date with the CISA website by hand.")
+    else:
+        print(f"  Human evidence: {news_watcher.printable(facts['evidence']['url'], 500)} dated "
+              f"{news_watcher.printable(facts['evidence']['date'], 20)}")
+    print(f"\n--- ENGLISH --- (as it will be approved)")
+    _say(reports["en"].rstrip("\n"))
+    print(f"\n--- DEUTSCH --- (as it will be approved)")
+    _say(reports["de"].rstrip("\n"))
+
+
+def approve_command(args):
+    """0 = approved (or already approved), 1 = refused or cancelled, 2 = the case id / case cannot be used."""
+    try:
+        case = cases.load_case(args.cases, args.case_id)
+    except cases.CaseError as error:
+        print(f"REJECTED: {news_watcher.printable(str(error), 300)}.")
+        return 2
+    state = cases.approval_state(case)
+    if state == "APPROVED":
+        print(f"The case {case.case_id} is already approved and nothing changed since. Nothing to do.")
+        print("Nothing was sent. A human submits it by hand.")
+        return 0
+    if state == "CHANGED":
+        print("WARNING: this case was approved before, but it CHANGED since it was approved. It must be approved again.")
+        try:  # from now on it is PENDING and the old approved.md is gone, whatever happens next
+            cases.demote_to_pending(args.cases, case.case_id)
+            case = cases.load_case(args.cases, args.case_id)
+        except cases.CaseError as error:
+            print(f"Refused: {news_watcher.printable(str(error), 300)}.")
+            return 1
+
+    facts, origin = case.facts, case.meta["origin"]
+    sbom_info = origin.get("sbom") if isinstance(origin.get("sbom"), dict) else {}
+    sbom_path = args.sbom or sbom_info.get("path")
+    config_path = args.config or origin.get("config_path")
+    if not isinstance(sbom_path, str) or not isinstance(config_path, str) or not isinstance(sbom_info.get("sha256"), str):
+        print("Refused: the case does not say which SBOM and config it came from. Use --sbom and --config, or draft it again.")
+        return 1
+
+    # 1. Rebuild the facts from the SBOM, the config and the saved data. Nothing from the case folder is trusted.
+    expected_product = {key: facts[key] for key in ("manufacturer", "product_name", "member_states")}
+    expected = {"component": facts["component"], "version": facts["version"], "exploited_cve": facts["cve_id"],
+                "exploited_via": facts["exploited_via"], "exploited_cve_matched_on": facts["cve_matched_on"]}
+    try:
+        config, components, sbom_sha256 = rederive.load_inputs(sbom_path, config_path, sbom_info["sha256"], expected_product)
+        finding, _, feeds = rederive.rederive(components, config, expected, args.cache, args.evidence, args.now)
+        awareness = datetime.fromisoformat(facts["awareness_time_utc"])
+        rebuilt = report_facts.build_facts(config, finding, kev_ids=feeds.kev_ids, evidence_dir=args.evidence, awareness=awareness)
+        earliest, earliest_why = aw.earliest_allowed(rebuilt["exploited_via"], rebuilt["cve_id"], feeds.kev, rebuilt["evidence"]["date"])
+    except (SbomError, ConfigError) as error:
+        print(f"Refused: {news_watcher.printable(str(error), 300)}")
+        return 1
+    except (rederive.RederiveError, report_facts.FactsError, aw.AwarenessError, ValueError) as error:
+        print(f"Refused: {news_watcher.printable(str(error), 400)}.")
+        return 1
+    if rebuilt != facts:
+        differing = sorted(key for key in set(rebuilt) | set(facts) if rebuilt.get(key) != facts.get(key))
+        print(f"Refused: the facts in the case differ from the facts rebuilt now from the SBOM and the saved data: "
+              f"{', '.join(differing)}.")
+        return 1
+    verdict = aw.check_awareness(awareness, args.now(), aw.Observation(None, None, earliest, earliest_why))
+    if verdict.refusals:
+        for line in verdict.refusals:
+            print(f"Refused: {news_watcher.printable(line, 500)}")
+        return 1
+
+    # 2. Run the fact checker again on the draft as it is on disk. The saved check.json is ignored.
+    check = fact_checker.check_reports(rebuilt, case.reports)
+    print(f"Fact check (run again now, check.json is ignored): {check.status}")
+    if not check.ok:
+        for item in check.problems:
+            print(f"  - {news_watcher.printable(item, 300)}")
+        print("Refused: the draft does not pass the fact check.")
+        return 1
+    try:
+        approved = {lang: report_template.approved_report(case.reports[lang], lang) for lang in report_facts.LANGUAGES}
+    except report_facts.FactsError as error:
+        print(f"Refused: {news_watcher.printable(str(error), 300)}.")
+        return 1
+
+    # 3. Show everything and ask the human.
+    kev_info = None
+    if rebuilt["exploited_via"] == "kev":
+        entry = next((e for e in feeds.kev["vulnerabilities"] if e.get("cveID") == rebuilt["cve_id"]), None)
+        kev_info = {"date_added": entry["dateAdded"] if entry else None, "date_released": feeds.kev.get("dateReleased"),
+                    "downloaded_at": feeds.kev_status.get("downloaded_at")}
+    suspicious = report_facts.claim_word_warnings(rebuilt)
+    if suspicious:
+        print(f"WARNING: {', '.join(suspicious)} contain(s) a word that reads like a statement (approved, sent, safe, fixed ...). "
+              "Check the wording of these names.")
+    for line in verdict.warnings:
+        print(news_watcher.printable(line, 600))
+    if rebuilt["deadline_utc"] and datetime.fromisoformat(rebuilt["deadline_utc"]) < args.now():
+        print("WARNING: THE 24-HOUR DEADLINE HAS ALREADY PASSED. Report as soon as possible and tell your CSIRT why it is late.")
+    _print_case_screen(case, rebuilt, kev_info, approved)
+    print("\nYou are about to approve this text. This tool never sends anything: you submit it by hand.")
+
+    answer = _ask(args, f"Type the case id ({case.case_id}) to confirm that you read the text above: ")
+    if answer is None or answer != case.case_id:
+        print("Cancelled (the case id was not typed exactly). Nothing was approved.")
+        return 1
+    answer = _ask(args, 'Are the manufacturer, product, component, version, CVE, awareness time and Member States above correct? Type the word "yes": ')
+    if answer is None or answer.strip() != "yes":
+        print("Cancelled. Nothing was approved.")
+        return 1
+    answer = _ask(args, "Type your name (it is saved in approvals.log; it is not a login): ")
+    name = news_watcher.clean_human_name(answer) if answer is not None else None
+    if name is None:
+        print("Cancelled (the name is empty, too long or has special characters). Nothing was approved.")
+        return 1
+
+    # 4. Nothing may have changed while the human was deciding: the case files, the SBOM, the config and the saved data.
+    try:
+        now_case = cases.load_case(args.cases, args.case_id)
+        raw_sbom = read_sbom_bytes(sbom_path)
+        config_again, components_again, _ = rederive.load_inputs(sbom_path, config_path, sbom_info["sha256"], expected_product)
+        finding_again, _, feeds_again = rederive.rederive(components_again, config_again, expected, args.cache, args.evidence, args.now)
+        rebuilt_again = report_facts.build_facts(config_again, finding_again, kev_ids=feeds_again.kev_ids,
+                                                 evidence_dir=args.evidence, awareness=awareness)
+    except (cases.CaseError, SbomError, ConfigError, rederive.RederiveError, report_facts.FactsError):
+        print("Cancelled: the case or the SBOM changed while you were deciding. Nothing was approved.")
+        return 1
+    if (any(now_case.sha256[key] != case.sha256[key] for key in ("draft", "facts", "case", "check"))
+            or hashlib.sha256(raw_sbom).hexdigest() != sbom_sha256 or rebuilt_again != rebuilt):
+        print("Cancelled: the case or the SBOM changed while you were deciding. Nothing was approved. Look at it and run the command again.")
+        return 1
+
+    # 5. Save: approved.md, then ONE line in approvals.log, then the status.
+    when = args.now().isoformat()
+    try:
+        approved_sha256 = cases.write_approved(args.cases, case.case_id, approved)
+        approval = {"approver": name, "approved_at": when, "draft_sha256": case.sha256["draft"],
+                    "facts_sha256": case.sha256["facts"], "sbom_sha256": sbom_sha256, "approved_sha256": approved_sha256}
+        cases.append_approval_log(args.cases, {"time": when, "case_id": case.case_id, "approver": name,
+                                               "draft_sha256": approval["draft_sha256"], "facts_sha256": approval["facts_sha256"],
+                                               "sbom_sha256": sbom_sha256, "approved_sha256": approved_sha256})
+        used = {**origin, "sbom": {**sbom_info, "path": str(Path(sbom_path).resolve())},
+                "config_path": str(Path(config_path).resolve())}  # the files that were really used (they may have moved)
+        cases.save_meta(args.cases, case.case_id, {**case.meta, "origin": used, "status": cases.STATUS_APPROVED, "approval": approval})
+    except (cases.CaseError, OSError) as error:
+        print(f"The approval could NOT be saved completely ({type(error).__name__}). The case is NOT approved. "
+              f"If a line for it was already added to approvals.log, running the command again adds a second line. "
+              f"Look at cases/{case.case_id}.")
+        return 1
+    print(f"\nApproved by {news_watcher.printable(name, 80)}. Saved: cases/{case.case_id}/approved.md and one line in cases/approvals.log.")
+    print("Any later change to the draft, the facts or the SBOM means this case must be approved again.")
+    print("Nothing was sent. This tool has no send function: you submit approved.md by hand "
+          "(ENISA Single Reporting Platform, EU Login). A human decides what happens next.")
     return 0

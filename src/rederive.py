@@ -14,6 +14,11 @@ from src.sbom_reader import SbomError, load_sbom_bytes, read_product_config, rea
 SAME_FINDING_KEYS = ("purl", "component", "version", "exploited_cve", "exploited_via", "exploited_cve_matched_on")
 
 
+def _required_keys(expected):
+    """Every key must match. Only `purl` may be left out of `expected` (facts.json does not carry it)."""
+    return [key for key in SAME_FINDING_KEYS if key != "purl" or "purl" in expected]
+
+
 class RederiveError(Exception):
     """The case cannot be confirmed from the SBOM and the saved data. The message is safe to show."""
 
@@ -45,7 +50,7 @@ def rederive(components, config, expected, cache_dir, evidence_dir, now):
     result = matcher.evaluate(components, feeds, evidence_dir)
     for finding in result["findings"]:
         if (finding["action"] == "REPORT_CASE" and finding["status"] == matcher.AFFECTED
-                and all(finding.get(key) == expected.get(key) for key in SAME_FINDING_KEYS)):
+                and all(finding.get(key) == expected.get(key) for key in _required_keys(expected))):
             try:
                 facts = report_facts.build_facts(config, finding, kev_ids=feeds.kev_ids, evidence_dir=evidence_dir)
             except report_facts.FactsError as error:

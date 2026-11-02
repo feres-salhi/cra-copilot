@@ -116,6 +116,36 @@ def labelled_lines(facts, lang):
     return result
 
 
+APPROVED_WORDING = {
+    "en": {
+        "heading": "EARLY WARNING - APPROVED BY A HUMAN (NOT SENT BY THIS TOOL)",
+        "footer": "A human approved this text (see approvals.log). This tool sends nothing: a human submits it by hand "
+                  "on the ENISA Single Reporting Platform.",
+    },
+    "de": {
+        "heading": "FRÜHWARNUNG - FREIGEGEBEN DURCH EINEN MENSCHEN (NICHT VON DIESEM WERKZEUG GESENDET)",
+        "footer": "Ein Mensch hat diesen Text freigegeben (siehe approvals.log). Dieses Werkzeug versendet nichts: Ein Mensch "
+                  "übermittelt ihn von Hand über die zentrale Meldeplattform der ENISA.",
+    },
+}
+
+
+def approved_report(draft_report, lang):
+    """The approved version of a checked draft: ONLY the heading and the footer are replaced, by fixed wording from code.
+
+    The draft must still have exactly the draft heading and footer, otherwise it is refused.
+    """
+    if lang not in LANGUAGES:
+        raise FactsError("unknown language")
+    lines = draft_report.split("\n") if isinstance(draft_report, str) else []
+    label = LABELS[lang]
+    if len(lines) < 4 or lines[-1] != "" or lines[0] != label["heading"] or lines[-2] != label["footer"]:
+        raise FactsError("the draft does not have the fixed heading and footer")
+    lines[0] = APPROVED_WORDING[lang]["heading"]
+    lines[-2] = APPROVED_WORDING[lang]["footer"]
+    return "\n".join(lines)
+
+
 SUMMARY_SOURCES = ("ai", "code")
 
 
