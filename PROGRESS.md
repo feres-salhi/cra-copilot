@@ -7,6 +7,10 @@
 - **Old texts are now refused:** a text that still contains the old sentence fails the fact check ("not an approved sentence").
 - **The already approved demo case keeps its old wording:** I did not touch `cases/` (as ordered). `cases/case-f341d2b694ea` still contains the old sentence. Its status is worked out from fingerprints, so it still shows as approved. Known limit found by the reviewer: such an old case cannot be re-drafted with `cra draft` (it says "already exists"; there is no redraft function), and `cra approve` would refuse its text. Moving the folder away by hand is the only way, and that is your decision.
 - **Tests:** 1234 passed, 3 skipped, 2 deselected (before: 1232). Code reviewer and security auditor subagents: no serious findings.
+### Piece 2 - suggested commands that really work on this computer
+- **What changed:** new `src/cli_name.py`. Every command the tool prints (`draft`, `approve`, `run`, `status`, the KEV and "open cases" hints, the usage line) is now written the way the tool was started. Started with `python -m src`, it prints e.g. `.venv\Scripts\python -m src approve case-...` (checked on this laptop: the status text now says `.venv\Scripts\python -m src run`). Only if the tool was started through a real program called `cra` does it print `cra`. Nothing was installed.
+- **Safety (found by the security auditor, fixed):** if the Python path has odd characters (`; & $ ( ) ' "` and similar) the plain `python -m src` is shown instead of pasting the path; a path with blanks is single-quoted for PowerShell. The form is written for PowerShell and works from the project folder.
+- **Tests:** `tests/conftest.py` fixes the printed name to `cra` so the older tests do not depend on the computer; `tests/test_cli_name.py` (23 tests) tests the real derivation, including one real child process. Known small gap: only the `status` text is checked end to end with the real derivation. **Total now: 1256 passed, 3 skipped, 2 deselected.**
 
 ## Summary for Fares: Phase 4 finished (autopilot, 2026-11-02)
 

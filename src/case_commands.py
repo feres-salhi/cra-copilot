@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src import awareness as aw
+from src import cli_name
 from src import cases, fact_checker, matcher, news_watcher, rederive, report_facts, report_template, report_writer
 from src.sbom_reader import ConfigError, SbomError, read_sbom_bytes
 
@@ -62,7 +63,7 @@ def _kev_age_warning(kev_status, now):
         return "WARNING: it is not known when the saved KEV list was downloaded."
     if now - saved > KEV_MAX_AGE:
         return (f"WARNING: the saved KEV list is {(now - saved).days} days old. New entries may be missing: "
-                "run `cra run` to refresh it.")
+                f"run `{cli_name.command('run')}` to refresh it.")
     return None
 
 
@@ -132,7 +133,7 @@ def draft_command(args):
     candidates = _distinct_cases(run, args.cve)
     if not candidates:
         print("No POSSIBLE REPORT CASE in this run." if not args.cve else "No POSSIBLE REPORT CASE with that CVE in this run.")
-        print("(`cra draft` only looks at cases the run record lists. Run `cra run` for a fresh check.)")
+        print(f"(`{cli_name.command('draft')}` only looks at cases the run record lists. Run `{cli_name.command('run')}` for a fresh check.)")
         return 0
     if not news_watcher.run_is_complete(run):
         print("Note: this run was INCOMPLETE (a source or a component could not be fully checked), so more cases may exist.")
@@ -162,7 +163,7 @@ def draft_command(args):
         return 1
     case_id = cases.make_case_id(facts)
     if cases.case_path(args.cases, case_id).exists():
-        print(f"Nothing was created: the case {case_id} already exists. Use `cra approve {case_id}` or look at cases/{case_id}.")
+        print(f"Nothing was created: the case {case_id} already exists. Use `{cli_name.command('approve', case_id)}` or look at cases/{case_id}.")
         return 1
 
     try:
@@ -293,7 +294,7 @@ def draft_command(args):
         print(f"Nothing was created: {news_watcher.printable(str(error), 300)}")
         return 1
     print(f"\nCase {created} created with the status PENDING (cases/{created}/).")
-    print(f"Next: read the text and approve it with:  cra approve {created}")
+    print(f"Next: read the text and approve it with:  {cli_name.command('approve', created)}")
     print("Nothing was sent. A human decides what happens next.")
     return 0
 
@@ -550,10 +551,10 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
         if effective < now:
             print("    THE 24-HOUR DEADLINE HAS ALREADY PASSED. Report as soon as possible and tell your CSIRT why it is late.")
         if state == cases.STATUS_PENDING:
-            print(news_watcher.printable(f"    next: read it and approve it with  cra approve {case.case_id}"
+            print(news_watcher.printable(f"    next: read it and approve it with  {cli_name.command('approve', case.case_id)}"
                                          + (approve_options if approve_options_ok else "  (add your --cases/--cache/--evidence folders)"), 700))
         elif state == "CHANGED":
-            print(news_watcher.printable(f"    CHANGED since it was approved: it must be approved again with  cra approve {case.case_id}"
+            print(news_watcher.printable(f"    CHANGED since it was approved: it must be approved again with  {cli_name.command('approve', case.case_id)}"
                                          + (approve_options if approve_options_ok else "  (add your --cases/--cache/--evidence folders)"), 700))
         else:
             print("    approved: a human submits approved.md by hand (this tool never sends anything)")
@@ -585,11 +586,11 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
             draft_options, draft_options_ok = _options(folders, defaults, ("cases", "cache", "runs", "evidence")) if defaults else ("", True)
             if run_path and (any(_risky(p) for p in paths) or not draft_options_ok
                              or not matcher.CVE_PATTERN.fullmatch(str(cve))):
-                line += "  (a file name has special characters, so no ready-made command is shown: use `cra draft --help`)"
+                line += f"  (a file name has special characters, so no ready-made command is shown: use `{cli_name.command('draft', '--help')}`)"
             elif run_path:
-                line += f'  -> cra draft --run "{run_path}" --cve {cve} --sbom "{sbom_path}" --config "{config_path}"{draft_options}'
+                line += f'  -> {cli_name.command("draft")} --run "{run_path}" --cve {cve} --sbom "{sbom_path}" --config "{config_path}"{draft_options}'
             else:
-                line += "  (this run could not be saved, so it cannot be drafted from: run `cra run` again)"
+                line += f"  (this run could not be saved, so it cannot be drafted from: run `{cli_name.command('run')}` again)"
             print(news_watcher.printable(line, 3000))
         if len(missing) > MAX_OPEN_SHOWN:
             print(f"  ... and {len(missing) - MAX_OPEN_SHOWN} more.")
