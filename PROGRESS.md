@@ -1,5 +1,37 @@
 # Progress Log
 
+## Summary for Fares: Phase 4 finished (autopilot, 2026-11-02)
+
+**What was built (nothing is ever sent; there is no send function anywhere, and a test checks that)**
+1. **Part 0:** screenshots 07 and 08 committed; decision P1 recorded (you kept "AI chooses from approved sentences"); the folder list in CLAUDE.md updated; the live-test results written down.
+2. **Piece 1 - cases (`src/cases.py`):** one folder per case, `cases/<case-id>/` with `facts.json`, `draft.md` (English + German), `check.json`, `case.json`. Strict case-id pattern before any path is built.
+3. **Piece 2 - `cra draft`:** you type the awareness time with a time zone. The tool checks it against what it saw itself: not in the future, not earlier than the day the CVE entered KEV, a loud warning and a typed reason if it is later than the first run that found the case. Deadline = awareness + 24 hours, stored in UTC, shown in Berlin time. Status PENDING.
+4. **Piece 3 - re-derive:** `cra draft` no longer trusts the run record. It runs the matcher again on the real SBOM and the saved data (no network).
+5. **Piece 4 - `cra approve <case-id>`:** rebuilds the facts, runs the fact checker again (ignores `check.json`), shows the full English and German text, and needs three typed answers (case id, `yes`, your name). It saves `approved.md`, one line in `cases/approvals.log` and the sha256 fingerprints of draft, facts and SBOM. Any later edit means it must be approved again. No flag skips a question.
+6. **Piece 5 - `cra run`:** now ends with a list of open cases with deadlines (earlier of your typed deadline and the tool's own first-run + 24 hours), and the possible report cases that still have no draft, with a ready command.
+7. **Piece 6 - schedule scripts:** `scripts/register-schedule.ps1` (every 4 hours, 30 minutes maximum, current user only) and `scripts/unregister-schedule.ps1`, with `scripts/README.md`. **I did NOT run them and did not change any Windows setting.**
+
+**Numbers (real, final run)**
+- Tests: `env -u CRA_LIVE_AI .venv\Scripts\python -m pytest -q --deselect tests/test_live_ai.py` gives **1232 passed, 3 skipped, 2 deselected** (without the deselect: 1232 passed, 5 skipped). Before Phase 4: 995 passed, 5 skipped. New test files: `test_cases` 41, `test_awareness` 59, `test_cli_draft` 25, `test_rederive` 14, `test_cli_approve` 57, `test_cli_run_open_cases` 16, `test_schedule_scripts` 12, `test_phase4_review_fixes` 13.
+- **Bandit:** No issues identified (3,802 lines scanned, 0 Low / 0 Medium / 0 High).
+- **Team review meeting** (security architect, penetration tester, code reviewer, 2 rounds): no way found to get a case approved without the human questions, except the already-accepted case "a person who can write to this computer forges all the files" (S7). Two serious items were fixed (the tool's own clock stays visible after drafting; no false warning at approval); all three agreed in round 2 that Phase 4 is done.
+- **Secrets check (separate subagent):** **PASS.** No key or password in any tracked file or in the whole git history (56 commits); `.env`, `.env.*`, `cases/`, `cache/`, `runs/` are ignored and never were tracked; the only key-shaped text is clearly fake test keys. Things to do before the first push (INFO): pin the two GitHub Actions; the tracked Strix report folder `reports/strix-2026-10-25/` contains `strix.log` with about 1800 mentions of `/home/fares` and a binary `.state/agents.db` that was not scanned (untrack or redact); only screenshots 03 and 05b were looked at (both without keys, 03 shows `C:/Users/feres/...`), the other eight were not checked; every commit carries your e-mail address and two author spellings ("Fares Salhi" and "Feres Salhi"), consider the GitHub noreply address.
+
+**Things you must know (honest)**
+- **A real Gemini call happened by accident.** The shell has `CRA_LIVE_AI=1`. One of the reviewing subagents ran a bare `pytest` and it made **one real Gemini call (HTTP 429, it failed; the key was not read or printed)**. That broke the rule "never call the real Gemini API". I always used `env -u CRA_LIVE_AI`. **Please remove `CRA_LIVE_AI` from your shell profile.** The key from the earlier leak is still treated as burned.
+- Not done on purpose: no push, `.env` never read or edited, no Strix run, the schedule scripts not run, Phase 5 not started.
+- KEV vendor/product are not shown on the draft screen on purpose (the saved KEV copy keeps only ids and dates); you compare the CVE id and date with the CISA website. See PLAN.md (i).
+- Accepted small risks from the code review: some code is repeated between draft and approve (KEV info, claim-word warning, the "rebuild the facts" steps); if they ever drift apart, tests may not notice. `approvals.log` over 20 MB would make approved cases show as CHANGED (about 60,000 approvals).
+
+**What needs you next**
+1. Try it by hand (PowerShell, in the project folder; this downloads real public data): `.venv\Scripts\python -m src run --sbom demo-data\demo-thermostat-sbom.json --config demo-data\demo-product-config.json`, then the `cra draft ...` command it prints, then `cra approve <case-id>`.
+2. Register the schedule yourself: first `powershell -ExecutionPolicy Bypass -File scripts\register-schedule.ps1 -WhatIf`, read it, then without `-WhatIf` (see `scripts/README.md`).
+3. Decide QUESTIONS.md **Q1 to Q5** (Q1 matters most: nobody sees the output of a scheduled run, so a new case is only noticed when you run `cra run` or look at `runs\`).
+4. Before the first push to GitHub: pin the two GitHub Actions to commit SHAs (your 2026-10-21 decision), look at screenshots 03 and 05b for visible keys, run the secrets check again. Strix with Claude Haiku is still planned for November.
+5. **Phase 5 is NOT started.**
+
+---
+
 ## Summary for Fares: Phase 3 finished (autopilot, 2026-10-26)
 
 **What was built (all of it offline, nothing is ever sent)**
@@ -21,7 +53,7 @@
 2. Decide **P1** (keep / drop the AI paragraph in version 1 / more approved sentences).
 3. Update the **folder list in CLAUDE.md** (new files: `report_facts.py`, `report_template.py`, `summary_sentences.py`, `env_loader.py`); I do not edit CLAUDE.md myself.
 4. Before the first push to GitHub: pin the two GitHub Actions to commit SHAs (your earlier decision) and look at screenshots 03 and 05b for visible keys.
-5. **Phase 4 is NOT started.** PLAN.md section (i) lists what Phase 4 must do first (awareness time against machine-observed times, approval regenerates the wording, re-derive "affected" from the SBOM, more KEV details in the draft ...). Strix with Claude Haiku is still planned for November.
+5. ~~Phase 4 is NOT started.~~ **(Out of date: Phase 4 is finished, see the summary at the top.)** PLAN.md section (i) lists what Phase 4 must do first (awareness time against machine-observed times, approval regenerates the wording, re-derive "affected" from the SBOM, more KEV details in the draft ...). Strix with Claude Haiku is still planned for November.
 
 ---
 
@@ -615,3 +647,13 @@ I also compared the matcher with OSV on all 6 real batch answers (32 listed vuln
 - **I did not run either script and did not change any Windows setting.** The tests only read the files and let PowerShell's parser check the spelling (it runs nothing): both parse with 0 errors.
 - **Reviews:** two reviewers, no serious finding. Fixed: the path check now runs after the paths are resolved and also refuses network paths; the README now lists exit code 2 and the "only with network" setting; two weak tests now check that the register line sits inside the `-WhatIf` guard and that the 30-minute limit is on the settings line. Added to the README: keep the project folder private (the task runs the files in it unattended).
 - **Tests:** 12 in `tests/test_schedule_scripts.py`; full suite 1219 passed, 5 skipped.
+
+
+### End-of-phase review (Phase 4 team meeting) and checks
+- **Team:** security architect, penetration tester, code reviewer; round 1 independent, round 2 to agree on the fix list.
+- **Round 1.** Penetration tester: tried to get a case approved or an approved text produced without the three answers, with forged run records, tampered cache, swapped SBOM/config, odd times, escape characters and resource use; **no new serious bypass**. The one bypass he reproduced (writing `case.json` and `approvals.log` by hand and computing the hashes) is the accepted local-writer limit S7/Q3. Architect: the gate is sound; two serious items: (1) the tool's own observation (first run + 24 hours) vanished after drafting, so a later typed time silently moved the deadline; (2) at approval a false warning "no run record found" appeared every time. Code reviewer: no bug, two documentation items (stale top summary, test totals not reproducible).
+- **Fixed after round 1:** approval now shows the reason typed at drafting, the tool's own deadline and a loud warning if the report deadline is later; the open list counts the earlier of the two deadlines and prints a NOTE; the false warning is gone; a saved KEV list older than 3 days is warned about; one broken case no longer hides the others in the open list; paths ending in a backslash get no ready-made command; documentation fixed (this summary, exact test command, PLAN.md (h) items 5-9, PLAN.md (i) item 4 note). 13 new tests (`tests/test_phase4_review_fixes.py`).
+- **Round 2:** all three agreed Phase 4 can be called done after the documentation edits.
+- **Accepted, written down:** repeated code between `cra draft` and `cra approve` (reviewer items 3-5), an `approvals.log` over 20 MB, a missing `first_found` in `case.json` (local writer), `approvals.log` without a hash chain.
+- **Process slip, honest note:** during round 1 the code reviewer ran a bare `pytest`; with `CRA_LIVE_AI=1` set in the shell that made one real Gemini call (HTTP 429, failed, key neither read nor printed). My own runs always used `env -u CRA_LIVE_AI`.
+- **Final checks:** full suite 1232 passed, 3 skipped with the live tests deselected (5 skipped without the deselect); Bandit: No issues identified, 3,802 lines.
