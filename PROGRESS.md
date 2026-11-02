@@ -1,5 +1,15 @@
 # Progress Log
 
+## Q1 work order (2026-11-02): desktop alerts - piece entries (newest summary comes at the end)
+
+### Piece 1 - the alert rules
+- **What it does:** after `cra run`, `src/alerts.py` decides whether anything is NEW or URGENT: a possible report case not alerted before; an open case (not approved, or changed after approval) with less than 6 hours left or already past its deadline; a source (KEV/OSV) that failed or was stale; a failed or rejected run; a case folder that cannot be read. What was already alerted is kept in `cache/alerts-state.json`, so the same case is not shown every 4 hours. A source or run problem and an overdue case are shown again after 24 hours if they last. A missing, damaged, oversized or future-dated state file means "alert again", never silence.
+- **Text:** fixed words plus values that passed strict patterns (CVE id, case id, fixed source names). Nothing from OSV, KEV, the SBOM or the config can get in.
+- **The run is never changed by alerts:** same output (plus an `ALERT:` line), same exit code, even if the notifier crashes. A notification that could not be shown is tried again at the next run.
+- **Tests:** `tests/test_alerts_rules.py` (44 tests, written first and seen failing). `tests/conftest.py` now replaces the notifier in every test, so no test can show a real notification. Full suite: 1363 passed, 3 skipped, 2 deselected (before: 1319).
+- **Reviews:** code reviewer + security auditor. Fixed: a rejected SBOM/config gave no alert; a state entry dated in the future could silence an alert; "unreadable" and "passed" alerts were never repeated; a case without its own deadline must use the tool deadline. Left as is (low): two overlapping runs can lose one state write (gives a duplicate alert, not silence).
+- **Not yet:** the real Windows toast, the log file, the `alerts` command and `--no-alerts` come in the next pieces. Until then a normal run shows the `ALERT:` line only.
+
 ## Summary for Fares: improvements work order finished (2026-11-02)
 
 **What changed (nothing is ever sent; no push; `.env` never touched; the real Gemini API never called; Phase 5 not started)**
