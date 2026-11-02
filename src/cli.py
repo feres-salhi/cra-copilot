@@ -76,8 +76,11 @@ def _describe(finding):
         text += f" - ACTIVELY EXPLOITED per {finding['exploited_via']} ({finding['exploited_cve']})"
         if finding.get("evidence"):
             text += f" [evidence: {finding['evidence']['source_url']}, dated {finding['evidence']['date']}]"
-        if finding["exploited_cve_matched_on"] != "id":
-            text += f", linked through an {finding['exploited_cve_matched_on']}: a human should confirm"
+        matched_on = finding["exploited_cve_matched_on"]
+        if matched_on == "alias":  # the normal case (a GHSA lists the CVE): shown, but no alarm
+            text += ", linked through an alias"
+        elif matched_on != "id":  # "upstream" (the weakest link) or anything unexpected: a human should confirm
+            text += f", linked through {'an ' + matched_on if isinstance(matched_on, str) and matched_on else 'an unknown link'}: a human should confirm"
     elif finding.get("evidence_problem"):
         text += f" - a human evidence file for {', '.join(finding['evidence_problem'])} exists but is UNUSABLE: fix it"
     elif not finding["exploited_known"]:

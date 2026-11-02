@@ -26,6 +26,11 @@
 - **Not changed:** the matcher, the run record (a test shows the record still lists both findings), `report_cases`, the exit codes, the open-cases list.
 - **Fixed after the reviewers:** the first version ignored `purl` and `ecosystem` and the way the CVE link was found; now the key is "everything except the advisory id", so a field added later separates findings by default.
 - **Tests:** `tests/test_run_grouping.py` (13); one older test updated to the grouped line. **Total now: 1308 passed, 3 skipped, 2 deselected.**
+### Piece 6 - "a human should confirm" only where the link is really uncertain
+- **What changed (`src/cli.py`):** in the `cra run` output the note "a human should confirm" now appears only when the CVE link rests on `upstream`, or on a value nobody expected (a safe default: unknown means warn). The normal GHSA-lists-the-CVE-as-alias case shows only "linked through an alias". A direct CVE id shows nothing.
+- **Still recorded:** the alias fact stays in the run record (`exploited_cve_matched_on`, unchanged, a test checks it), in the draft screen (`linked through an alias`) and in the report assessment line ("rests on an alias" / "beruht auf einem Alias"), which the existing template tests still check.
+- **Docs:** `QUESTIONS.md` question 7 and later improvements 1 and 2 are marked as done / superseded. S14 stays valid (upstream still gets the note).
+- **Tests:** `tests/test_confirm_note.py` (13) and one older assertion updated. **Total now: 1319 passed, 3 skipped, 2 deselected.**
 
 ## Summary for Fares: Phase 4 finished (autopilot, 2026-11-02)
 
