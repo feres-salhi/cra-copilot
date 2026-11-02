@@ -21,6 +21,11 @@
 - **What changed (`src/awareness.py`):** besides `2026-11-02 09:30 Berlin` / `UTC` / `+01:00`, the prompt now accepts ISO 8601 with a `T` and an offset or `Z`, for example `2026-11-02T01:50+01:00` or `2026-11-02T01:50Z`. The help text shows it. Still refused: no time zone, seconds, lower case `t`/`z`, a blank before the zone, `+0100`, impossible dates/offsets, a time in the future, a time earlier than the data allows (those checks are the same code as before and the tests run ISO times through them).
 - **Known small points (reviewers, not changed):** `-00:00` is accepted as UTC (the old format did the same). No test types an ISO answer through the whole `cra draft` dialogue; the typed text is stored as typed after it matched the strict pattern.
 - **Tests:** 29 new in `tests/test_awareness.py`. **Total now: 1296 passed, 3 skipped, 2 deselected.** Reviewers: no serious findings.
+### Piece 5 - `cra run` shows one vulnerability once
+- **What changed (`src/cli.py`, display only):** findings that are the same vulnerability under several ids (GHSA, PYSEC ...) are printed as one line with all ids, e.g. `requests 2.30.0: GHSA-j8r2-6x86-q33q, PYSEC-2023-74 (CVE-2023-32681) -> AFFECTED ...` (seen in a real test run). Two findings are merged only if they have the same CVE ids AND are identical in every other field except the advisory id (component, version, purl, ecosystem, action, status, rule, exploited, how the CVE link was found ...). Anything that differs stays on its own line, so grouping cannot hide a different judgement; findings without CVE ids are never merged.
+- **Not changed:** the matcher, the run record (a test shows the record still lists both findings), `report_cases`, the exit codes, the open-cases list.
+- **Fixed after the reviewers:** the first version ignored `purl` and `ecosystem` and the way the CVE link was found; now the key is "everything except the advisory id", so a field added later separates findings by default.
+- **Tests:** `tests/test_run_grouping.py` (13); one older test updated to the grouped line. **Total now: 1308 passed, 3 skipped, 2 deselected.**
 
 ## Summary for Fares: Phase 4 finished (autopilot, 2026-11-02)
 

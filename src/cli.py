@@ -85,6 +85,44 @@ def _describe(finding):
     return text
 
 
+def group_findings(findings):
+    """DISPLAY ONLY: [[finding, ...], ...] - findings that are the same vulnerability under several ids (GHSA, PYSEC ...).
+
+    Two findings are grouped only if they have the same non-empty CVE ids AND are identical in EVERY other field except
+    the advisory id itself (component, version, purl, ecosystem, action, status, rule, exploited, how the CVE link was
+    found ...). The key is made of "all fields except vulnerability_id", so a field added later separates findings by
+    default. Anything that differs stays apart, so grouping can never hide a different judgement. The findings and the
+    run record are not changed. First appearance sets the order.
+    """
+    groups, index = [], {}
+    for finding in findings:
+        cves = finding.get("cve_ids")
+        if not isinstance(cves, list) or not cves:
+            groups.append([finding])
+            continue
+        rest = {name: value for name, value in finding.items() if name not in ("vulnerability_id", "cve_ids")}
+        key = (tuple(sorted(str(c) for c in cves)), json.dumps(rest, sort_keys=True, default=str))
+        if key in index:
+            index[key].append(finding)
+        else:
+            index[key] = [finding]
+            groups.append(index[key])
+    return groups
+
+
+def describe_group(group):
+    """One line for a group of findings: all ids once, then the CVE ids. A group of one reads exactly as `_describe`."""
+    first = group[0]
+    if len(group) == 1:
+        return _describe(first)
+    ids = []
+    for finding in group:
+        vuln = finding.get("vulnerability_id") or "-"
+        if vuln not in ids:
+            ids.append(vuln)
+    return _describe({**first, "vulnerability_id": ", ".join(ids)})
+
+
 def _save_failed_run(args, started, error_name):
     """A crashed run must still leave a record, so `status` does not keep showing an older good run."""
     record = {
@@ -164,8 +202,8 @@ def _run(args):
         ("HUMAN_REVIEW", "Human review"),
         ("RECORD", "Recorded (affected, not known to be exploited)"),
     ):
-        for finding in by_action.get(action, []):
-            print(f"[{title}] {_describe(finding)}")
+        for group in group_findings(by_action.get(action, [])):
+            print(f"[{title}] {describe_group(group)}")
     if result["packages"]:
         print("Per package (if any version of a package is AFFECTED, the package counts as AFFECTED):")
         for package, package_status in sorted(result["packages"].items()):

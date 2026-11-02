@@ -131,7 +131,7 @@ def test_a_human_evidence_file_makes_requests_a_report_case(tmp_path, capsys):
     code = run_cli(tmp_path)
     out = capsys.readouterr().out
     assert code == 3
-    assert "requests 2.30.0: GHSA-j8r2-6x86-q33q (CVE-2023-32681) -> AFFECTED" in out
+    assert "requests 2.30.0: GHSA-j8r2-6x86-q33q, PYSEC-2023-74 (CVE-2023-32681) -> AFFECTED" in out  # one vulnerability, shown once with both ids
     assert "ACTIVELY EXPLOITED per evidence_file" in out
     assert "linked through an alias: a human should confirm" in out
 
