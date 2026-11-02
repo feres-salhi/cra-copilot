@@ -9,6 +9,7 @@ Commands:
     approve      a human reads and approves a PENDING case (asks questions; nothing is sent)
     draft        create a PENDING case from a possible report case (a human types the awareness time)
     preview-report   print the German + English draft of each possible report case of a saved run (saves and sends nothing)
+    alerts       --test shows one test notification, --list shows the last alerts (cache/alerts.log)
     kev accept-removals   a human accepts a KEV list that lost CVE ids (types "yes" and a name; nothing skips this)
 
 Exit codes of `run`:
@@ -520,6 +521,14 @@ def build_parser():
     approve.add_argument("--sbom", help="only if the SBOM file moved: its new path (it must still be the same file)")
     approve.add_argument("--config", help="only if the config file moved: its new path")
     approve.set_defaults(handler=case_commands.approve_command)
+
+    alert_cmd = commands.add_parser(
+        "alerts", help="check or read the desktop alerts (--test shows one test notification, --list shows the last alerts)")
+    which = alert_cmd.add_mutually_exclusive_group(required=True)
+    which.add_argument("--test", action="store_true", help="show one fixed test notification (to check that alerts appear on this computer)")
+    which.add_argument("--list", action="store_true", help="show the last alerts from cache/alerts.log")
+    alert_cmd.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder with alerts.log")
+    alert_cmd.set_defaults(handler=alerts.command)
 
     kev = commands.add_parser("kev", help="work with the saved CISA KEV list")
     kev_commands = kev.add_subparsers(dest="kev_command", required=True)

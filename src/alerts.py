@@ -384,3 +384,53 @@ def _show(notify, title, body):
         return bool(notify(title, body))
     except Exception:  # whatever goes wrong with the notification, the run goes on
         return False
+
+
+# ---------------------------------------------------------------- the command `alerts --test` / `alerts --list`
+
+LIST_LINES = 20
+MAX_LIST_BYTES = 64_000  # only the end of the log is read
+
+
+def _test_alert(args):
+    title, body = build_message(TEST, [])
+    shown = _show(args.notify or default_notifier(), title, body)
+    logged = append_log(args.cache, args.now(), TEST, [], shown)
+    if shown:
+        print("A test notification was handed to Windows. Did you see it appear on your screen?")
+        print("If not: check that Focus Assist / Do Not Disturb is off, and that notifications for \"Windows PowerShell\" "
+              "are on in Windows Settings > System > Notifications.")
+        return 0
+    print("The test notification was NOT shown (Windows PowerShell could not show it, or this is not Windows).")
+    print(f"Real alerts are then written to {LOG_NAME} in the cache folder and printed in the run output."
+          + ("" if logged else " (The log could not be written either.)"))
+    return 1
+
+
+def _list_alerts(args):
+    path = log_path(args.cache)
+    try:
+        if not os.path.lexists(path):
+            print("No alerts have been written yet.")
+            return 0
+        if not path.is_file():  # a folder or a special file: never open it
+            raise OSError("not a regular file")
+        with open(path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - MAX_LIST_BYTES))
+            raw = stream.read(MAX_LIST_BYTES)
+        if size > MAX_LIST_BYTES:  # we started in the middle of a line (maybe of a character): drop that piece
+            raw = raw.partition(b"\n")[2]
+    except OSError:
+        print("The alert log could not be read. Look at the file in the cache folder yourself.")
+        return 1
+    lines = raw.decode("utf-8", errors="replace").splitlines()[-LIST_LINES:]
+    print(f"The last {len(lines)} alert(s) (UTC time | Berlin time | kind | ids | toast):")
+    for line in lines:
+        print("  " + news_watcher.printable(line, 400))
+    return 0
+
+
+def command(args):
+    return _test_alert(args) if args.test else _list_alerts(args)
