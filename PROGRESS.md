@@ -1,5 +1,9 @@
 # Progress Log
 
+## Summary for Fares: Q1 work order (2026-11-02), unfinished at the end
+- **Built (pieces 1-5, each committed):** alert rules + state file, Windows toast, `cache/alerts.log`, `alerts --test` / `alerts --list`, `run --no-alerts`. Nothing was sent, nothing pushed, `.env` untouched, no real Gemini call, no Strix, no Windows setting changed.
+- **Not done:** the end-of-work Bandit re-check after piece 5 and the security-auditor result for piece 5; `cra close` (Q5); the real toast was never shown on screen: please run `.venv\Scripts\python -m src alerts --test`.
+
 ## Q1 work order (2026-11-02): desktop alerts - piece entries (newest summary comes at the end)
 
 ### Piece 1 - the alert rules
@@ -8,7 +12,7 @@
 - **The run is never changed by alerts:** same output (plus an `ALERT:` line), same exit code, even if the notifier crashes. A notification that could not be shown is tried again at the next run.
 - **Tests:** `tests/test_alerts_rules.py` (44 tests, written first and seen failing). `tests/conftest.py` now replaces the notifier in every test, so no test can show a real notification. Full suite: 1363 passed, 3 skipped, 2 deselected (before: 1319).
 - **Reviews:** code reviewer + security auditor. Fixed: a rejected SBOM/config gave no alert; a state entry dated in the future could silence an alert; "unreadable" and "passed" alerts were never repeated; a case without its own deadline must use the tool deadline. Left as is (low): two overlapping runs can lose one state write (gives a duplicate alert, not silence).
-- **Not yet:** `--no-alerts` comes in the next piece.
+- **Done:** all five pieces are in.
 
 ### Piece 2 - the Windows toast
 - **What it does:** `src/toast.py` shows one notification through Windows PowerShell's built-in notification API (no new package). The PowerShell script is one fixed text. The title and body are handed over as environment variables of the child process (data, never code), and both Python and the script check them against the same strict pattern (letters, digits, blank and `. , : ; ( ) / -`). The program is started by its full path, as a list, without a shell, with no input, no console window, a 20-second limit and a short list of environment variables (no keys). Any failure gives "not shown"; it never raises.
@@ -28,6 +32,9 @@
 - **`--list`:** prints the last 20 lines of `cache/alerts.log`. It reads only the last 64 KB, drops a cut-off first line, turns any control character into `?`, and refuses folders and special files.
 - **Reviews:** fixed: a cut-off first line after the seek (could show a broken fragment, or a broken character), a special file named `alerts.log` is not opened. Left as is (low): a symlink at `alerts.log` is followed.
 - **Tests:** 15 new tests in `tests/test_alerts_command.py`.
+
+### Piece 5 - `run --no-alerts`
+- **What it does:** turns the alerts off for that run: no notification, no log line, nothing remembered; one line says so. Result and exit code are unchanged. Also works on the failed and rejected-input paths. Tests never show a real notification (conftest fake). 6 new tests in `tests/test_alerts_off.py`. The code reviewer found no bug. The security auditor for this piece had not reported when the usage limit hit.
 
 ## Summary for Fares: improvements work order finished (2026-11-02)
 
