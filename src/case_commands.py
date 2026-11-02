@@ -484,6 +484,49 @@ def approve_command(args):
     return 0
 
 
+def close_command(args):
+    """0 = marked (or already marked), 1 = refused or cancelled, 2 = the case id / case cannot be used.
+    For a HUMAN: the tool cannot know whether the report was really submitted. It sends nothing."""
+    try:
+        case = cases.load_case(args.cases, args.case_id)
+    except cases.CaseError as error:
+        print(f"REJECTED: {news_watcher.printable(str(error), 300)}.")
+        return 2
+    state = cases.approval_state(case)
+    if state != cases.STATUS_APPROVED:
+        print(f"Refused: only an approved case can be marked as submitted (this one is {state}).")
+        return 1
+    if cases.is_closed(case):
+        print(f"The case {case.case_id} is already marked as submitted. Nothing to do.")
+        return 0
+    facts = case.facts
+    _say(f"Case {case.case_id}: {facts['cve_id']} in {facts['component']} {facts['version']}, "
+         f"deadline {report_facts.format_time(facts['deadline_utc'], 'en')}")
+    print("Marking it as submitted means: YOU sent approved.md yourself (ENISA Single Reporting Platform). "
+          "This tool sent nothing and cannot check it.")
+    answer = _ask(args, f"Type the case id ({case.case_id}) to confirm: ")
+    if answer is None or answer != case.case_id:
+        print("Cancelled (the case id was not typed exactly). Nothing was changed.")
+        return 1
+    answer = _ask(args, 'Did you submit this report by hand? Type the word "yes": ')
+    if answer is None or answer.strip() != "yes":
+        print("Cancelled. Nothing was changed.")
+        return 1
+    answer = _ask(args, "Type your name (it is saved in closed.log; it is not a login): ")
+    name = news_watcher.clean_human_name(answer) if answer is not None else None
+    if name is None:
+        print("Cancelled (the name is empty, too long or has special characters). Nothing was changed.")
+        return 1
+    try:
+        cases.write_closed(args.cases, case, name, args.now().isoformat())
+    except (cases.CaseError, OSError) as error:
+        print(f"The mark could NOT be saved ({type(error).__name__}). The case stays open.")
+        return 1
+    print(f"\nThe case {case.case_id} is marked as submitted by {news_watcher.printable(name, 80)}. It leaves the open list.")
+    print("Nothing was sent. This tool has no send function. A human decides what happens next.")
+    return 0
+
+
 # ---------------------------------------------------------------- the end of `cra run`: open cases
 
 MAX_OPEN_SHOWN = 10
@@ -517,6 +560,7 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
     folders = folders or {}
     defaults = defaults or {}
     print("\nOPEN CASES (a human must act on these):")
+    close_options, close_options_ok = _options(folders, defaults, ("cases",)) if defaults else ("", True)
     approve_options, approve_options_ok = _options(folders, defaults, ("cases", "cache", "evidence")) if defaults else ("", True)
     found, unreadable = cases.list_cases(cases_root)
     entries = []
@@ -533,8 +577,8 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
         except Exception:  # one broken case must not hide the others
             print(f"  WARNING: the case {case.case_id} could not be judged (internal error). Look at it by hand.")
             continue
-        if state == cases.STATUS_APPROVED and effective < now:
-            continue  # approved, and the 24 hours are over: nothing left for this tool to remind of
+        if state == cases.STATUS_APPROVED and cases.is_closed(case):
+            continue  # a human marked it as submitted by hand
         entries.append((effective, deadline, tool_deadline, case, state))
     entries.sort(key=lambda entry: (entry[0], entry[3].case_id))
     if not entries:
@@ -558,6 +602,8 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
                                          + (approve_options if approve_options_ok else "  (add your --cases/--cache/--evidence folders)"), 700))
         else:
             print("    approved: a human submits approved.md by hand (this tool never sends anything)")
+            print(news_watcher.printable(f"    when you have submitted it, mark it with  {cli_name.command('close', case.case_id)}"
+                                         + (close_options if close_options_ok else "  (add your --cases folder)"), 500))
     if len(entries) > MAX_OPEN_SHOWN:
         print(f"  ... and {len(entries) - MAX_OPEN_SHOWN} more open case(s) (look in the cases folder).")
     if unreadable:
