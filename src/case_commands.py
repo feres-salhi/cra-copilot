@@ -7,7 +7,7 @@ question for the human (CLAUDE.md rule 6). Nothing here sends anything: there is
 import hashlib
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src import awareness as aw
@@ -15,6 +15,7 @@ from src import cases, fact_checker, matcher, news_watcher, rederive, report_fac
 from src.sbom_reader import ConfigError, SbomError, read_sbom_bytes
 
 MAX_TRIES = 3
+KEV_MAX_AGE = timedelta(days=3)  # an older saved KEV list gets a warning: new entries may be missing
 MAX_REASON_LENGTH = 300
 MIN_REASON_LENGTH = 10
 MAX_CHOICES = 50
@@ -35,6 +36,40 @@ def _say(text, limit=1500):
 
 def _berlin_and_utc(utc_text):
     return report_facts.format_time(utc_text, "en")
+
+
+def _first_found(origin):
+    """(started_at, file name) of the first run that found the case, from what `cra draft` saved; (None, None) if unknown."""
+    first = origin.get("first_found") if isinstance(origin, dict) else None
+    try:
+        started = datetime.fromisoformat(first["started_at"])
+        if started.utcoffset() is None:
+            return None, None
+        return started.astimezone(timezone.utc), str(first["file"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+
+
+def _tool_deadline(meta):
+    """The deadline by the TOOL'S OWN clock: first run that found the case + 24 hours (None if unknown)."""
+    started, _ = _first_found(meta.get("origin"))
+    return started + report_facts.AWARENESS_WINDOW if started else None
+
+
+def _kev_age_warning(kev_status, now):
+    saved = news_watcher._parse_time(kev_status.get("downloaded_at")) if isinstance(kev_status, dict) else None
+    if saved is None:
+        return "WARNING: it is not known when the saved KEV list was downloaded."
+    if now - saved > KEV_MAX_AGE:
+        return (f"WARNING: the saved KEV list is {(now - saved).days} days old. New entries may be missing: "
+                "run `cra run` to refresh it.")
+    return None
+
+
+def _risky(text):
+    """True for a path that is unsafe to put inside a pasted command (shell characters, or a trailing backslash)."""
+    text = str(text)
+    return bool(_SHELL_SPECIAL & set(text)) or text.endswith("\\")
 
 
 def clean_reason(text):
@@ -116,6 +151,9 @@ def draft_command(args):
     except rederive.RederiveError as error:
         print(f"Nothing was created: {news_watcher.printable(str(error), 400)}.")
         return 1
+    age_warning = _kev_age_warning(feeds.kev_status, args.now())
+    if age_warning:
+        print(age_warning)
     print(f"Re-derived from the SBOM and the saved data: {finding['status']} ({finding['rule']}), the same finding as in the run record.")
     # From here on ONE copy of the saved KEV list is used: the one the matcher just used.
     kev, kev_ids, kev_meta = feeds.kev, feeds.kev_ids, feeds.kev_status
@@ -339,7 +377,8 @@ def approve_command(args):
         print(f"Refused: the facts in the case differ from the facts rebuilt now from the SBOM and the saved data: "
               f"{', '.join(differing)}.")
         return 1
-    verdict = aw.check_awareness(awareness, args.now(), aw.Observation(None, None, earliest, earliest_why))
+    first_at, first_file = _first_found(origin)
+    verdict = aw.check_awareness(awareness, args.now(), aw.Observation(first_at, first_file, earliest, earliest_why))
     if verdict.refusals:
         for line in verdict.refusals:
             print(f"Refused: {news_watcher.printable(line, 500)}")
@@ -369,9 +408,23 @@ def approve_command(args):
     if suspicious:
         print(f"WARNING: {', '.join(suspicious)} contain(s) a word that reads like a statement (approved, sent, safe, fixed ...). "
               "Check the wording of these names.")
+    age_warning = _kev_age_warning(feeds.kev_status, args.now())
+    if age_warning:
+        print(age_warning)
     for line in verdict.warnings:
         print(news_watcher.printable(line, 600))
-    if rebuilt["deadline_utc"] and datetime.fromisoformat(rebuilt["deadline_utc"]) < args.now():
+    typed_reason = (origin.get("awareness") or {}).get("reason") if isinstance(origin.get("awareness"), dict) else None
+    if typed_reason:
+        print(f"Reason typed when the case was drafted (why the awareness time is later than the first run): "
+              f"{news_watcher.printable(typed_reason, 300)}")
+    tool_deadline = first_at + report_facts.AWARENESS_WINDOW if first_at else None
+    if tool_deadline:
+        print(f"By the tool's own clock (first run that found the case + 24 hours) the deadline would be: "
+              f"{_berlin_and_utc(tool_deadline.isoformat())}")
+        if datetime.fromisoformat(rebuilt["deadline_utc"]) > tool_deadline:
+            print("WARNING: the deadline in this report is LATER than the tool's own clock allows. Make sure the awareness "
+                  "time is right before you approve.")
+    if datetime.fromisoformat(rebuilt["deadline_utc"]) < args.now() or (tool_deadline and tool_deadline < args.now()):
         print("WARNING: THE 24-HOUR DEADLINE HAS ALREADY PASSED. Report as soon as possible and tell your CSIRT why it is late.")
     _print_case_screen(case, rebuilt, kev_info, approved)
     print("\nYou are about to approve this text. This tool never sends anything: you submit it by hand.")
@@ -451,7 +504,7 @@ def _options(folders, defaults, names):
         value = folders.get(name)
         if value is None or Path(value).resolve() == Path(defaults[name]).resolve():
             continue
-        if _SHELL_SPECIAL & set(str(value)):
+        if _risky(value):
             return "", False
         text += f' --{name} "{value}"'
     return text, True
@@ -471,20 +524,30 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
         if time.monotonic() - started > OPEN_LIST_SECONDS:
             print(f"  WARNING: the list was cut short after {OPEN_LIST_SECONDS} seconds. Look in the cases folder.")
             break
-        state = cases.approval_state(case)
-        deadline = datetime.fromisoformat(case.facts["deadline_utc"])
-        if state == cases.STATUS_APPROVED and deadline < now:
+        try:
+            state = cases.approval_state(case)
+            deadline = datetime.fromisoformat(case.facts["deadline_utc"])
+            tool_deadline = _tool_deadline(case.meta)
+            effective = min(deadline, tool_deadline) if tool_deadline else deadline  # the earlier of the two counts
+        except Exception:  # one broken case must not hide the others
+            print(f"  WARNING: the case {case.case_id} could not be judged (internal error). Look at it by hand.")
+            continue
+        if state == cases.STATUS_APPROVED and effective < now:
             continue  # approved, and the 24 hours are over: nothing left for this tool to remind of
-        entries.append((deadline, case, state))
-    entries.sort(key=lambda entry: (entry[0], entry[1].case_id))
+        entries.append((effective, deadline, tool_deadline, case, state))
+    entries.sort(key=lambda entry: (entry[0], entry[3].case_id))
     if not entries:
         print("  No open cases.")
-    for deadline, case, state in entries[:MAX_OPEN_SHOWN]:
+    for effective, deadline, tool_deadline, case, state in entries[:MAX_OPEN_SHOWN]:
         facts = case.facts
         print(news_watcher.printable(
             f"  {case.case_id}  {state:<8} {facts['cve_id']} in {facts['component']} {facts['version']}  "
-            f"deadline {report_facts.format_time(facts['deadline_utc'], 'en')}  [{_time_left(deadline, now)}]", 400))
-        if deadline < now:
+            f"deadline {report_facts.format_time(facts['deadline_utc'], 'en')}  [{_time_left(effective, now)}]", 400))
+        if tool_deadline and tool_deadline < deadline:
+            print(news_watcher.printable(
+                f"    NOTE: by the tool's own clock (first run that found the case + 24 hours) the deadline is "
+                f"{report_facts.format_time(tool_deadline.isoformat(), 'en')}. The awareness time that was typed is later.", 400))
+        if effective < now:
             print("    THE 24-HOUR DEADLINE HAS ALREADY PASSED. Report as soon as possible and tell your CSIRT why it is late.")
         if state == cases.STATUS_PENDING:
             print(news_watcher.printable(f"    next: read it and approve it with  cra approve {case.case_id}"
@@ -520,7 +583,7 @@ def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_p
             line = f"  {cve} in {component} {version}"
             paths = [str(run_path or ""), str(sbom_path), str(config_path)]
             draft_options, draft_options_ok = _options(folders, defaults, ("cases", "cache", "runs", "evidence")) if defaults else ("", True)
-            if run_path and (_SHELL_SPECIAL & set("".join(paths)) or not draft_options_ok
+            if run_path and (any(_risky(p) for p in paths) or not draft_options_ok
                              or not matcher.CVE_PATTERN.fullmatch(str(cve))):
                 line += "  (a file name has special characters, so no ready-made command is shown: use `cra draft --help`)"
             elif run_path:
