@@ -27,3 +27,7 @@ secrets.*
 
 # Local the assistant settings (personal, not for the repo)
 .the assistant/settings.local.json
+
+# Strix raw log and internal state (large, not for upload)
+reports/*/strix.log
+reports/*/.state/
