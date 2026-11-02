@@ -187,7 +187,7 @@ See screenshot 03 below.
 
 ### Live Gemini test (2026-11-02)
 
-The first real call passed: mode `ai`, fact check PASS, model `gemini-3.5-flash` (screenshot 07). Later calls got HTTP 429 (free tier rate limit). The preview correctly used the fixed fallback text and said so.
+The first real call passed: mode `ai`, fact check PASS, model `gemini-3.5-flash`. This was seen only in the terminal output of the live test (`tests/test_live_ai.py`); there is no screenshot of it. Later calls got HTTP 429 (free tier rate limit). Screenshot 07 shows the draft warning with the fixed fallback text after such a failed AI call; the preview said so.
 
 ### API-key leak found by Fares
 
