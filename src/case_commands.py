@@ -6,6 +6,7 @@ question for the human (CLAUDE.md rule 6). Nothing here sends anything: there is
 
 import hashlib
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -310,6 +311,9 @@ def approve_command(args):
     sbom_info = origin.get("sbom") if isinstance(origin.get("sbom"), dict) else {}
     sbom_path = args.sbom or sbom_info.get("path")
     config_path = args.config or origin.get("config_path")
+    if not cases.is_local_path(sbom_path) or not cases.is_local_path(config_path):
+        print("Refused: the case points to a network path for the SBOM or the config. Use --sbom and --config with local files.")
+        return 1
     if not isinstance(sbom_path, str) or not isinstance(config_path, str) or not isinstance(sbom_info.get("sha256"), str):
         print("Refused: the case does not say which SBOM and config it came from. Use --sbom and --config, or draft it again.")
         return 1
@@ -424,3 +428,105 @@ def approve_command(args):
     print("Nothing was sent. This tool has no send function: you submit approved.md by hand "
           "(ENISA Single Reporting Platform, EU Login). A human decides what happens next.")
     return 0
+
+
+# ---------------------------------------------------------------- the end of `cra run`: open cases
+
+MAX_OPEN_SHOWN = 10
+OPEN_LIST_SECONDS = 20  # the scheduled run has a time limit: this list must never use it up
+_SHELL_SPECIAL = set('"$`%&;^|<>!\'\n')
+
+
+def _time_left(deadline, now):
+    if deadline >= now:
+        return f"{aw._span(deadline - now)} left"
+    return f"OVERDUE by {aw._span(now - deadline)}"
+
+
+def _options(folders, defaults, names):
+    """(' --cache "X" --cases "Y"', True) for the folders that differ from the default ones, so a ready-made command
+    works on the same folders as this run. (text, False) when a folder name has characters that are risky when pasted."""
+    text = ""
+    for name in names:
+        value = folders.get(name)
+        if value is None or Path(value).resolve() == Path(defaults[name]).resolve():
+            continue
+        if _SHELL_SPECIAL & set(str(value)):
+            return "", False
+        text += f' --{name} "{value}"'
+    return text, True
+
+
+def print_open_cases(cases_root, now, product, report_findings, run_path, sbom_path, config_path, folders=None, defaults=None):
+    """A short list of the cases a human still has to act on, most urgent deadline first, and the possible report cases
+    of this run that have no draft yet. Reads only; creates nothing."""
+    folders = folders or {}
+    defaults = defaults or {}
+    print("\nOPEN CASES (a human must act on these):")
+    approve_options, approve_options_ok = _options(folders, defaults, ("cases", "cache", "evidence")) if defaults else ("", True)
+    found, unreadable = cases.list_cases(cases_root)
+    entries = []
+    started = time.monotonic()
+    for case in found:
+        if time.monotonic() - started > OPEN_LIST_SECONDS:
+            print(f"  WARNING: the list was cut short after {OPEN_LIST_SECONDS} seconds. Look in the cases folder.")
+            break
+        state = cases.approval_state(case)
+        deadline = datetime.fromisoformat(case.facts["deadline_utc"])
+        if state == cases.STATUS_APPROVED and deadline < now:
+            continue  # approved, and the 24 hours are over: nothing left for this tool to remind of
+        entries.append((deadline, case, state))
+    entries.sort(key=lambda entry: (entry[0], entry[1].case_id))
+    if not entries:
+        print("  No open cases.")
+    for deadline, case, state in entries[:MAX_OPEN_SHOWN]:
+        facts = case.facts
+        print(news_watcher.printable(
+            f"  {case.case_id}  {state:<8} {facts['cve_id']} in {facts['component']} {facts['version']}  "
+            f"deadline {report_facts.format_time(facts['deadline_utc'], 'en')}  [{_time_left(deadline, now)}]", 400))
+        if deadline < now:
+            print("    THE 24-HOUR DEADLINE HAS ALREADY PASSED. Report as soon as possible and tell your CSIRT why it is late.")
+        if state == cases.STATUS_PENDING:
+            print(news_watcher.printable(f"    next: read it and approve it with  cra approve {case.case_id}"
+                                         + (approve_options if approve_options_ok else "  (add your --cases/--cache/--evidence folders)"), 700))
+        elif state == "CHANGED":
+            print(news_watcher.printable(f"    CHANGED since it was approved: it must be approved again with  cra approve {case.case_id}"
+                                         + (approve_options if approve_options_ok else "  (add your --cases/--cache/--evidence folders)"), 700))
+        else:
+            print("    approved: a human submits approved.md by hand (this tool never sends anything)")
+    if len(entries) > MAX_OPEN_SHOWN:
+        print(f"  ... and {len(entries) - MAX_OPEN_SHOWN} more open case(s) (look in the cases folder).")
+    if unreadable:
+        print(f"  WARNING: {len(unreadable)} case folder(s) cannot be read and need a human look: "
+              f"{', '.join(news_watcher.printable(name, 40) for name in unreadable[:10])}")
+
+    seen, missing = set(), []
+    for finding in report_findings:
+        key = (finding.get("component"), finding.get("version"), finding.get("exploited_cve"))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            case_id = cases.make_case_id({"manufacturer": product["manufacturer"], "product_name": product["product_name"],
+                                          "component": key[0], "version": key[1], "cve_id": key[2]})
+            exists = cases.case_path(cases_root, case_id).exists()
+        except (KeyError, TypeError, cases.CaseError):
+            exists = False
+        if not exists:
+            missing.append(key)
+    if missing:
+        print("\nPOSSIBLE REPORT CASES WITHOUT A DRAFT YET (the 24-hour clock starts when your company becomes aware):")
+        for component, version, cve in missing[:MAX_OPEN_SHOWN]:
+            line = f"  {cve} in {component} {version}"
+            paths = [str(run_path or ""), str(sbom_path), str(config_path)]
+            draft_options, draft_options_ok = _options(folders, defaults, ("cases", "cache", "runs", "evidence")) if defaults else ("", True)
+            if run_path and (_SHELL_SPECIAL & set("".join(paths)) or not draft_options_ok
+                             or not matcher.CVE_PATTERN.fullmatch(str(cve))):
+                line += "  (a file name has special characters, so no ready-made command is shown: use `cra draft --help`)"
+            elif run_path:
+                line += f'  -> cra draft --run "{run_path}" --cve {cve} --sbom "{sbom_path}" --config "{config_path}"{draft_options}'
+            else:
+                line += "  (this run could not be saved, so it cannot be drafted from: run `cra run` again)"
+            print(news_watcher.printable(line, 3000))
+        if len(missing) > MAX_OPEN_SHOWN:
+            print(f"  ... and {len(missing) - MAX_OPEN_SHOWN} more.")

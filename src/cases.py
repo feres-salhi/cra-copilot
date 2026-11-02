@@ -213,21 +213,43 @@ def demote_to_pending(root, case_id):
     _write_text(folder / "case.json", _json_text({**current, "status": STATUS_PENDING, "approval": None}))
 
 
-def _logged(root, case_id, approval):
-    """True if approvals.log has the line of this approval (same case, name, time and approved text)."""
+_LOG_CACHE = {}  # (path, modified time, size) -> parsed lines: a list of many cases reads the log only once
+
+
+def _log_entries(root):
+    path = Path(root) / "approvals.log"
     try:
-        with open(Path(root) / "approvals.log", "rb") as handle:
+        info = path.stat()
+        key = (str(path), info.st_mtime_ns, info.st_size)
+        if key in _LOG_CACHE:
+            return _LOG_CACHE[key]
+        with open(path, "rb") as handle:
             raw = handle.read(MAX_LOG_BYTES + 1)
     except OSError:
-        return False
-    if len(raw) > MAX_LOG_BYTES:
-        return False
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        if (isinstance(entry, dict) and entry.get("case_id") == case_id and entry.get("approver") == approval["approver"]
+        return []
+    entries = []
+    if len(raw) <= MAX_LOG_BYTES:
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+    _LOG_CACHE.clear()  # only the newest state of one log is kept
+    _LOG_CACHE[key] = entries
+    return entries
+
+
+def is_local_path(text):
+    """False for network paths (\\\\host\\share, //host/share): reading one would open a connection to another computer."""
+    return isinstance(text, str) and not text.startswith(("\\\\", "//"))
+
+
+def _logged(root, case_id, approval):
+    """True if approvals.log has the line of this approval (same case, name, time and approved text)."""
+    for entry in _log_entries(root):
+        if (entry.get("case_id") == case_id and entry.get("approver") == approval["approver"]
                 and entry.get("time") == approval["approved_at"] and entry.get("approved_sha256") == approval["approved_sha256"]
                 and entry.get("draft_sha256") == approval["draft_sha256"] and entry.get("facts_sha256") == approval["facts_sha256"]):
             return True
@@ -350,6 +372,8 @@ def approval_state(case):
     sbom = case.meta["origin"].get("sbom")
     try:
         from src.sbom_reader import SbomError, read_sbom_bytes
+        if not is_local_path(sbom["path"]):
+            return "CHANGED"
         raw = read_sbom_bytes(sbom["path"])
     except (SbomError, KeyError, TypeError):
         return "CHANGED"
@@ -364,6 +388,8 @@ def list_cases(root):
     except OSError:
         return [], []
     found, unreadable = [], []
+    if len(names) > MAX_LISTED_CASES:
+        unreadable.append(f"(more than {MAX_LISTED_CASES} case folders: the rest were NOT read)")
     for name in names[:MAX_LISTED_CASES]:
         try:
             found.append(load_case(root, name))
