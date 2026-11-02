@@ -8,7 +8,7 @@
 - **The run is never changed by alerts:** same output (plus an `ALERT:` line), same exit code, even if the notifier crashes. A notification that could not be shown is tried again at the next run.
 - **Tests:** `tests/test_alerts_rules.py` (44 tests, written first and seen failing). `tests/conftest.py` now replaces the notifier in every test, so no test can show a real notification. Full suite: 1363 passed, 3 skipped, 2 deselected (before: 1319).
 - **Reviews:** code reviewer + security auditor. Fixed: a rejected SBOM/config gave no alert; a state entry dated in the future could silence an alert; "unreadable" and "passed" alerts were never repeated; a case without its own deadline must use the tool deadline. Left as is (low): two overlapping runs can lose one state write (gives a duplicate alert, not silence).
-- **Not yet:** the `alerts` command and `--no-alerts` come in the next pieces.
+- **Not yet:** `--no-alerts` comes in the next piece.
 
 ### Piece 2 - the Windows toast
 - **What it does:** `src/toast.py` shows one notification through Windows PowerShell's built-in notification API (no new package). The PowerShell script is one fixed text. The title and body are handed over as environment variables of the child process (data, never code), and both Python and the script check them against the same strict pattern (letters, digits, blank and `. , : ; ( ) / -`). The program is started by its full path, as a list, without a shell, with no input, no console window, a 20-second limit and a short list of environment variables (no keys). Any failure gives "not shown"; it never raises.
@@ -21,7 +21,13 @@
 - **What it does:** every alert is appended as one line: UTC time | Berlin time | kind | ids | toast shown or not, e.g. `2026-10-21T12:00:00Z | 2026-10-21 14:00 CEST Berlin | NEW_REPORT_CASE | CVE-2021-44228 (case-...) | toast: shown`. It is written whether or not the toast worked, so you can always find an alert there. Only validated values (CVE id, case id, fixed source name) can get into a line. The file is moved to `alerts.log.1` when it is over 1 MB. It lives in `cache/`, which is not uploaded to GitHub.
 - **Rule for "already alerted":** an alert is remembered only if the toast was shown OR the log line was written. If both fail, it comes again at the next run. A log that cannot be written is reported even when the toast worked.
 - **Reviews:** fixed: a failed rotation must not stop logging; a half-written last line must not swallow the next one; logging never raises; a failed source is named in the log line. Left as is (low): a symlink at `cache/alerts.log` is followed (needs write access to `cache/`).
-- **Tests:** 17 new tests in `tests/test_alerts_log.py`. Full suite: see the final summary at the top.
+- **Tests:** 16 new tests in `tests/test_alerts_log.py`. Full suite: see the final summary at the top.
+
+### Piece 4 - `python -m src alerts --test` and `alerts --list`
+- **`--test`:** shows one fixed test notification ("Test notification. If you can read this, alerts work on this computer.") and asks "Did you see it?". If Windows could not show it, it says so (exit code 1) and tells you the real alerts go to `cache/alerts.log` and the run output. It also writes a TEST line to the log, and does not touch the alert memory. **I did not run it for real** (it would pop up on your screen); please run `.venv\Scripts\python -m src alerts --test` yourself.
+- **`--list`:** prints the last 20 lines of `cache/alerts.log`. It reads only the last 64 KB, drops a cut-off first line, turns any control character into `?`, and refuses folders and special files.
+- **Reviews:** fixed: a cut-off first line after the seek (could show a broken fragment, or a broken character), a special file named `alerts.log` is not opened. Left as is (low): a symlink at `alerts.log` is followed.
+- **Tests:** 15 new tests in `tests/test_alerts_command.py`.
 
 ## Summary for Fares: improvements work order finished (2026-11-02)
 
