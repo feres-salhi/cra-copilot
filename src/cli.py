@@ -156,6 +156,9 @@ def _print_open_cases(args, config, report_cases, saved_path):
 
 def _raise_alerts(args, config, report_cases, kev_status, osv_status, run_failed):
     """After the run: alert only for something new or urgent. Never changes the result or the exit code."""
+    if getattr(args, "no_alerts", False):
+        print("Alerts are turned off for this run (--no-alerts): no notification, no alert log, nothing remembered.")
+        return
     alerts.after_run(args.now(), args.cache, args.cases, config, report_cases, kev_status, osv_status, run_failed,
                      args.notify or alerts.default_notifier())
 
@@ -483,6 +486,7 @@ def build_parser():
     run.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
     run.add_argument("--evidence", default=str(PROJECT_ROOT / "evidence"), help="folder with human evidence files")
     run.add_argument("--cases", default=str(PROJECT_ROOT / "cases"), help="folder for cases (read only here: the open ones are listed at the end)")
+    run.add_argument("--no-alerts", action="store_true", help="turn the desktop alerts off for this run")
     run.set_defaults(handler=_run)
 
     status = commands.add_parser("status", help="show the state of the last runs")
