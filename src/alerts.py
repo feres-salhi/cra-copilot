@@ -314,7 +314,8 @@ def default_notifier():
     """The notifier a normal run uses (tests replace it, so a test can never show a real notification)."""
     if _override is not None:
         return _override
-    return lambda title, body: False  # replaced by the Windows toast in the next piece
+    from src import toast  # here, not at the top: toast.py uses this file's text pattern
+    return toast.show
 
 
 def _show(notify, title, body):
