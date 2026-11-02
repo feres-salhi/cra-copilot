@@ -102,6 +102,16 @@ def _save_failed_run(args, started, error_name):
         print("The record of this failed run could NOT be saved either.")
 
 
+def _print_open_cases(args, config, report_cases, saved_path):
+    try:
+        case_commands.print_open_cases(args.cases, args.now(), config, report_cases, saved_path,
+                                       Path(args.sbom).resolve(), Path(args.config).resolve(),
+                                       folders={"cases": args.cases, "cache": args.cache, "runs": args.runs, "evidence": args.evidence},
+                                       defaults={name: PROJECT_ROOT / name for name in ("cases", "cache", "runs", "evidence")})
+    except Exception as error:  # the list is a help: it must never change the result or the exit code of the run
+        print(f"(The list of open cases could not be shown: {type(error).__name__}. Look in the cases folder.)")
+
+
 def _run(args):
     try:
         config = read_product_config(args.config)
@@ -117,11 +127,13 @@ def _run(args):
     except OSError as error:
         print(f"RESULT INCOMPLETE - the cache folder could not be used ({type(error).__name__}).")
         _save_failed_run(args, started, type(error).__name__)
+        _print_open_cases(args, config, [], None)  # the deadlines of open cases run on, whatever the download did
         print("Nothing was sent. A human decides what happens next.")
         return 1
     except Exception as error:  # a last safety net: never end with a raw traceback and a wrong exit code
         print(f"RESULT INCOMPLETE - internal error ({type(error).__name__}). Do not rely on this run.")
         _save_failed_run(args, started, type(error).__name__)
+        _print_open_cases(args, config, [], None)
         print("Nothing was sent. A human decides what happens next.")
         return 1
     finished = args.now()
@@ -198,6 +210,7 @@ def _run(args):
     print(KEV_NOTE)
     if saved_path:
         print(f"Run saved: {saved_path}")
+    _print_open_cases(args, config, report_cases, saved_path)
     print("Nothing was sent. A human decides what happens next.")
 
     if report_cases:
@@ -417,6 +430,7 @@ def build_parser():
     run.add_argument("--cache", default=str(PROJECT_ROOT / "cache"), help="folder for saved downloads")
     run.add_argument("--runs", default=str(PROJECT_ROOT / "runs"), help="folder for run records")
     run.add_argument("--evidence", default=str(PROJECT_ROOT / "evidence"), help="folder with human evidence files")
+    run.add_argument("--cases", default=str(PROJECT_ROOT / "cases"), help="folder for cases (read only here: the open ones are listed at the end)")
     run.set_defaults(handler=_run)
 
     status = commands.add_parser("status", help="show the state of the last runs")
