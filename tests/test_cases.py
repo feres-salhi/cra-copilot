@@ -230,7 +230,8 @@ def test_files_are_written_as_utf_8_json_without_secrets_or_html(tmp_path):
 def approved_meta(case):
     meta = dict(case.meta, status="APPROVED")
     meta["approval"] = {"approver": "Fares", "approved_at": "2026-11-02T10:00:00+00:00",
-                        "draft_sha256": case.sha256["draft"], "facts_sha256": case.sha256["facts"], "sbom_sha256": "a" * 64}
+                        "draft_sha256": case.sha256["draft"], "facts_sha256": case.sha256["facts"], "sbom_sha256": "a" * 64,
+                        "approved_sha256": "b" * 64}
     return meta
 
 
